@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>메모리 게임 메이커</title>
+    <!-- 외부 라이브러리 로드 -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans KR', sans-serif; -webkit-tap-highlight-color: transparent; background-color: #FFFBEB; margin: 0; }
+        .rotate-y-180 { transform: rotateY(180deg); }
+        .perspective { perspective: 1200px; }
+        .preserve-3d { transform-style: preserve-3d; }
+        .backface-hidden { backface-visibility: hidden; }
+        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes zoom-in { from { transform: scale(0.95); } to { transform: scale(1); } }
+        .animate-in { animation: fade-in 0.3s ease-out, zoom-in 0.3s ease-out; }
+        
+        /* 슬라이더 커스텀 디자인 */
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #F97316;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 4px solid white;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // 아이콘 컴포넌트 (가장 안전한 i 태그 방식)
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const kebabName = name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+            return (
+                <i 
+                    data-lucide={kebabName} 
+                    style={{ width: size, height: size }} 
+                    className={`inline-block stroke-[2.5] ${className}`}
+                ></i>
+            );
+        };
+
+        const App = () => {
+            // API 키 설정 (배포 시 본인의 키를 입력하세요)
+            const apiKey = ""; 
+
+            // --- 1. 상태 관리 ---
+            const [view, setView] = useState('settings'); 
+            const [activeStep, setActiveStep] = useState(1); 
+            const [toast, setToast] = useState({ show: false, message: "" });
+            
+            const [config, setConfig] = useState({
+                cardCount: 12,
+                contentType: null, 
+                pictureMode: null,   
+                gameType: null, 
+                playerCount: null,
+            });
+
+            const [wordInputs, setWordInputs] = useState(Array.from({ length: 12 }, () => ({ a: '', b: '' })));
+            const [fractionInputs, setFractionInputs] = useState(Array.from({ length: 12 }, () => ({ a: { whole: '', num: '', den: '' }, b: { whole: '', num: '', den: '' } })));
+            const [pictureInputs, setPictureInputs] = useState(Array.from({ length: 12 }, () => ({ a: '', b: null })));
+
+            const [cards, setCards] = useState([]);
+            const [flippedIndices, setFlippedIndices] = useState([]);
+            const [matchedIds, setMatchedIds] = useState([]);
+            const [scores, setScores] = useState([]); 
+            const [attempts, setAttempts] = useState([]); 
+            const [currentPlayer, setCurrentPlayer] = useState(0);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [loadingProgress, setLoadingProgress] = useState(0);
+            const [loadingStatus, setLoadingStatus] = useState("");
+            const [elapsedTime, setElapsedTime] = useState(0);
+            const [gameStarted, setGameStarted] = useState(false); 
+            const [errorMessage, setErrorMessage] = useState(null);
+            const [capturedImage, setCapturedImage] = useState(null);
+            const [isCapturing, setIsCapturing] = useState(false);
+            const [userName, setUserName] = useState("");
+
+            const timerRef = useRef(null);
+            const resultRef = useRef(null);
+
+            // 아이콘 초기화 루틴
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            });
+
+            const isStepLocked = (step) => activeStep < step;
+            const showToast = (message) => setToast({ show: true, message });
+
+            useEffect(() => {
+                if (toast.show) {
+                    const t = setTimeout(() => setToast({ show: false, message: "" }), 3000);
+                    return () => clearTimeout(t);
+                }
+            }, [toast.show]);
+
+            useEffect(() => {
+                const pairCount = config.cardCount / 2;
+                const syncArray = (prev, type) => {
+                    const newArr = [...prev];
+                    if (newArr.length < pairCount) {
+                        const diff = pairCount - newArr.length;
+                        const add = Array.from({ length: diff }, () => {
+                            if (type === 'fraction') return { a: { whole: '', num: '', den: '' }, b: { whole: '', num: '', den: '' } };
+                            if (type === 'picture') return { a: '', b: null };
+                            return { a: '', b: '' };
+                        });
+                        return [...newArr, ...add];
+                    }
+                    return newArr.slice(0, pairCount);
+                };
+                setWordInputs(p => syncArray(p, 'word'));
+                setPictureInputs(p => syncArray(p, 'picture'));
+                setFractionInputs(p => syncArray(p, 'fraction'));
+            }, [config.cardCount]);
+
+            useEffect(() => {
+                if (view === 'playing' && config.playerCount === 1 && gameStarted) {
+                    timerRef.current = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+                } else {
+                    clearInterval(timerRef.current);
+                }
+                return () => clearInterval(timerRef.current);
+            }, [view, config.playerCount, gameStarted]);
+
+            const handleFileUpload = (index, file) => {
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const n = [...pictureInputs];
+                    n[index] = { ...n[index], b: e.target.result };
+                    setPictureInputs(n);
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const fetchAiImage = async (prompt) => {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            instances: [{ prompt: `${prompt}, simple cute educational game icon, pastel colors, white background` }],
+                            parameters: { sampleCount: 1 }
+                        })
+                    });
+                    const result = await response.json();
+                    return `data:image/png;base64,${result.predictions[0].bytesBase64Encoded}`;
+                } catch (e) { return null; }
+            };
+
+            const checkContentSafety = async (textList) => {
+                if (!apiKey || textList.length === 0) return true;
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                const prompt = `다음 리스트에 비속어/욕설이 있나요? 있으면 'FAIL', 안전하면 'PASS'. 리스트: [${textList.join(', ')}]`;
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+                    const data = await response.json();
+                    return data.candidates?.[0]?.content?.parts?.[0]?.text?.toUpperCase().includes('PASS');
+                } catch (e) { return true; }
+            };
+
+            const handleStartRequest = async () => {
+                const pairCount = config.cardCount / 2;
+                let errors = [];
+                let texts = [];
+
+                if (config.contentType === 'word') {
+                    wordInputs.slice(0, pairCount).forEach((v, i) => {
+                        if (!v.a.trim() || (config.gameType === 'associative' && !v.b.trim())) errors.push(i + 1);
+                        else { texts.push(v.a); if (v.b) texts.push(v.b); }
+                    });
+                } else if (config.contentType === 'picture') {
+                    pictureInputs.slice(0, pairCount).forEach((v, i) => {
+                        if (config.pictureMode === 'ai' && !v.a.trim()) errors.push(i + 1);
+                        else if (config.pictureMode === 'upload' && !v.b) errors.push(i + 1);
+                        else if (v.a) texts.push(v.a);
+                    });
+                } else if (config.contentType === 'fraction') {
+                    fractionInputs.slice(0, pairCount).forEach((v, i) => {
+                        if (!v.a.num || !v.a.den) errors.push(i + 1);
+                    });
+                }
+
+                if (errors.length > 0) { setErrorMessage(`${errors.join(', ')}번 정보를 모두 채워주세요!`); return; }
+
+                setLoadingStatus("안전한 단어인지 검사 중...");
+                setView('loading');
+                const isSafe = await checkContentSafety(texts);
+                if (!isSafe) { setView('settings'); setErrorMessage("부적절한 단어가 있어요! 바른 말로 고쳐주세요."); return; }
+                
+                prepareGameData();
+            };
+
+            const prepareGameData = async () => {
+                setLoadingStatus("놀이 준비 중...");
+                setLoadingProgress(20);
+                const pairCount = config.cardCount / 2;
+                let deck = [];
+
+                if (config.contentType === 'picture' && config.pictureMode === 'ai') {
+                    for (let i = 0; i < pairCount; i++) {
+                        setLoadingStatus(`AI가 ${i+1}번째 카드를 그려요... 🎨`);
+                        const img = await fetchAiImage(pictureInputs[i].a);
+                        const content = img || 'https://via.placeholder.com/150?text=Error';
+                        if (config.gameType === 'associative') {
+                            deck.push({ id: i, content: pictureInputs[i].a, type: 'text', instanceId: Math.random() });
+                            deck.push({ id: i, content: content, type: 'image', instanceId: Math.random() });
+                        } else {
+                            deck.push({ id: i, content: content, type: 'image', instanceId: Math.random() });
+                            deck.push({ id: i, content: content, type: 'image', instanceId: Math.random() });
+                        }
+                        setLoadingProgress(20 + Math.floor((i+1)/pairCount * 80));
+                    }
+                    setCards(deck);
+                    setView('preview');
+                } else {
+                    if (config.contentType === 'picture') {
+                        for (let i = 0; i < pairCount; i++) {
+                            if (config.gameType === 'associative') {
+                                deck.push({ id: i, content: pictureInputs[i].a, type: 'text', instanceId: Math.random() });
+                                deck.push({ id: i, content: pictureInputs[i].b, type: 'image', instanceId: Math.random() });
+                            } else {
+                                deck.push({ id: i, content: pictureInputs[i].b, type: 'image', instanceId: Math.random() });
+                                deck.push({ id: i, content: pictureInputs[i].b, type: 'image', instanceId: Math.random() });
+                            }
+                        }
+                    } else if (config.contentType === 'word') {
+                        wordInputs.slice(0, pairCount).forEach((v, i) => {
+                            deck.push({ id: i, content: v.a, type: 'text', instanceId: Math.random() });
+                            deck.push({ id: i, content: config.gameType === 'identical' ? v.a : v.b, type: 'text', instanceId: Math.random() });
+                        });
+                    } else {
+                        fractionInputs.slice(0, pairCount).forEach((v, i) => {
+                            deck.push({ id: i, content: v.a, type: 'fraction', instanceId: Math.random() });
+                            deck.push({ id: i, content: config.gameType === 'identical' ? v.a : v.b, type: 'fraction', instanceId: Math.random() });
+                        });
+                    }
+                    setCards(deck.sort(() => Math.random() - 0.5));
+                    setLoadingProgress(100);
+                    setTimeout(() => startMainGame(), 800);
+                }
+            };
+
+            const startMainGame = () => {
+                if (config.contentType === 'picture') setCards(prev => [...prev].sort(() => Math.random() - 0.5));
+                setScores(Array(config.playerCount || 1).fill(0));
+                setAttempts(Array(config.playerCount || 1).fill(0));
+                setCurrentPlayer(0);
+                setMatchedIds([]);
+                setFlippedIndices([]);
+                setElapsedTime(0);
+                setGameStarted(false);
+                setView('playing');
+            };
+
+            const handleCardClick = (idx) => {
+                if (isProcessing || flippedIndices.includes(idx) || matchedIds.includes(cards[idx].id)) return;
+                if (!gameStarted && config.playerCount === 1) setGameStarted(true);
+
+                const newFlipped = [...flippedIndices, idx];
+                setFlippedIndices(newFlipped);
+                if (newFlipped.length === 2) {
+                    setIsProcessing(true);
+                    setAttempts(prev => { const n = [...prev]; n[currentPlayer]++; return n; });
+                    const [i1, i2] = newFlipped;
+                    if (cards[i1].id === cards[i2].id) {
+                        setTimeout(() => {
+                            const newMatched = [...matchedIds, cards[i1].id];
+                            setMatchedIds(newMatched);
+                            setScores(prev => { const n = [...prev]; n[currentPlayer]++; return n; });
+                            setFlippedIndices([]);
+                            setIsProcessing(false);
+                            if (newMatched.length === cards.length / 2) { setGameStarted(false); setTimeout(() => setView('result'), 600); }
+                        }, 600);
+                    } else {
+                        setTimeout(() => {
+                            setFlippedIndices([]);
+                            if (config.playerCount > 1) setCurrentPlayer(p => (p + 1) % config.playerCount);
+                            setIsProcessing(false);
+                        }, 1000);
+                    }
+                }
+            };
+
+            const handleCapture = async () => {
+                setIsCapturing(true);
+                setTimeout(async () => {
+                    const canvas = await html2canvas(resultRef.current, { backgroundColor: '#ffffff', scale: 2, useCORS: true });
+                    setCapturedImage(canvas.toDataURL('image/png'));
+                    setIsCapturing(false);
+                }, 100);
+            };
+
+            // --- UI 렌더링 시작 ---
+            return (
+                <div className="min-h-screen selection:bg-orange-200 antialiased overflow-x-hidden">
+                    {/* 설정 화면 */}
+                    {view === 'settings' && (
+                        <div className="flex flex-col items-center py-6 md:py-10 px-4 animate-in">
+                            {toast.show && (
+                                <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-orange-600 text-white px-8 py-4 rounded-full shadow-2xl flex items-center gap-3 animate-bounce max-w-[90vw]">
+                                    <Icon name="Star" size={20} className="text-white fill-white" />
+                                    <span className="font-black text-sm md:text-lg tracking-tight">{toast.message}</span>
+                                </div>
+                            )}
+                            <div className="w-full max-w-4xl bg-white rounded-[45px] md:rounded-[60px] shadow-[0_20px_0_0_#FEF3C7] border-[6px] md:border-[10px] border-white overflow-hidden relative">
+                                <div className="bg-gradient-to-br from-orange-400 via-orange-500 to-rose-400 p-8 md:p-14 text-center text-white">
+                                    <h1 className="text-2xl md:text-5xl font-black mb-3 italic flex justify-center items-center gap-4">
+                                        <Icon name="Rocket" size={36} className="text-white" /> 메모리 게임 메이커
+                                    </h1>
+                                    <p className="bg-white/20 px-6 py-2 rounded-full inline-block text-[10px] md:text-sm font-black italic tracking-tight">나만의 특별한 카드로 즐기는 학습 놀이 도구</p>
+                                </div>
+
+                                <div className="p-6 md:p-14 space-y-10 md:space-y-16">
+                                    {/* 1단계 */}
+                                    <section className={`transition-all duration-500 ${activeStep === 1 ? 'scale-[1.02]' : ''}`}>
+                                        <div className="flex items-center gap-3 mb-6">
+                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-3">1</div>
+                                            <h2 className="text-lg md:text-2xl font-black text-slate-800 tracking-tight">게임 모드를 선택해주세요</h2>
+                                            {activeStep > 1 && <Icon name="CheckCircle2" size={24} className="ml-auto text-emerald-500" />}
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4 md:gap-8">
+                                            <div className="flex flex-col gap-3">
+                                                <button onClick={() => { setConfig({...config, gameType: 'identical'}); setActiveStep(2); showToast("똑같은 모양 찾기 선택! 2단계 주제를 골라주세요. 🎨"); }} className={`p-4 md:p-8 rounded-[35px] md:rounded-[50px] border-4 transition-all flex flex-col items-center gap-3 ${config.gameType === 'identical' ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}>
+                                                    <Icon name="Copy" size={40} className={config.gameType === 'identical' ? 'text-orange-500' : 'text-slate-300'} />
+                                                    <span className="text-sm md:text-2xl font-black">똑같은 카드</span>
+                                                </button>
+                                                <p className="text-[10px] md:text-xs font-bold text-center text-slate-400 px-2">똑같은 그림 2장을 찾는 가장 쉬운 방식!</p>
+                                            </div>
+                                            <div className="flex flex-col gap-3">
+                                                <button onClick={() => { setConfig({...config, gameType: 'associative'}); setActiveStep(2); showToast("의미가 같은 짝 찾기 선택! 2단계 주제를 골라보세요. 🎨"); }} className={`p-4 md:p-8 rounded-[35px] md:rounded-[50px] border-4 transition-all flex flex-col items-center gap-3 ${config.gameType === 'associative' ? 'border-rose-500 bg-rose-50 text-rose-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}>
+                                                    <Icon name="ArrowRightLeft" size={40} className={config.gameType === 'associative' ? 'text-rose-500' : 'text-slate-300'} />
+                                                    <span className="text-sm md:text-2xl font-black">의미가 같은 카드</span>
+                                                </button>
+                                                <p className="text-[10px] md:text-xs font-bold text-center text-slate-400 px-2">단어와 뜻처럼 서로 짝을 맞추는 방식!</p>
+                                            </div>
+                                        </div>
+                                    </section>
+
+                                    {/* 2단계 */}
+                                    <section className={`transition-all duration-500 ${isStepLocked(2) ? 'opacity-20 pointer-events-none grayscale' : activeStep === 2 ? 'scale-[1.02]' : ''}`}>
+                                        <div className="flex items-center gap-4 mb-8">
+                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform -rotate-3">2</div>
+                                            <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">카드 게임 주제</h2>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-3 md:gap-6">
+                                            <button onClick={() => { setConfig({...config, contentType: 'word'}); setActiveStep(3); showToast("단어 모드 선택! 3단계에서 카드 개수를 정해주세요. 🔢"); }} className={`p-4 md:p-6 rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'word' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-100 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}><Icon name="FileText" size={32} /><span className="font-black text-xs md:text-xl">단어</span></button>
+                                            <button onClick={() => { setConfig({...config, contentType: 'fraction'}); setActiveStep(3); showToast("분수 모드 선택! 3단계에서 카드 개수를 정해주세요. 🔢"); }} className={`p-4 md:p-6 rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'fraction' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-100 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}><div className="font-black flex flex-col items-center leading-none"><span>1</span><div className="h-0.5 w-6 bg-current" /><span>2</span></div><span className="font-black text-xs md:text-xl">분수</span></button>
+                                            <button onClick={() => { setConfig({...config, contentType: 'picture'}); }} className={`p-4 md:p-6 rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'picture' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}><Icon name="ImageIcon" size={32} /><span className="font-black text-xs md:text-xl">그림</span></button>
+                                        </div>
+                                        {config.contentType === 'picture' && (
+                                            <div className="flex gap-4 mt-6 animate-in">
+                                                <div className="flex-1 flex flex-col gap-2"><button onClick={() => { setConfig({...config, pictureMode: 'ai'}); setActiveStep(3); showToast("AI가 마법처럼 그림을 그려요! ✨"); }} className={`w-full py-4 rounded-3xl border-4 flex items-center justify-center gap-2 font-black text-xs md:text-sm ${config.pictureMode === 'ai' ? 'bg-emerald-50 border-emerald-500 text-emerald-600' : 'bg-white border-slate-100 text-slate-300'}`}><Icon name="Sparkles" size={16} /> AI 화가</button><p className="text-[9px] text-center text-slate-400 font-bold">단어만 쓰면 그려요!</p></div>
+                                                <div className="flex-1 flex flex-col gap-2"><button onClick={() => { setConfig({...config, pictureMode: 'upload'}); setActiveStep(3); showToast("내 사진으로 카드를 만들어요! 📸"); }} className={`w-full py-4 rounded-3xl border-4 flex items-center justify-center gap-2 font-black text-xs md:text-sm ${config.pictureMode === 'upload' ? 'bg-emerald-50 border-emerald-500 text-emerald-600' : 'bg-white border-slate-100 text-slate-300'}`}><Icon name="Upload" size={16} /> 직접 올리기</button><p className="text-[9px] text-center text-slate-400 font-bold">내 사진을 써요!</p></div>
+                                            </div>
+                                        )}
+                                    </section>
+
+                                    {/* 3단계 */}
+                                    <section className={`transition-all duration-500 ${isStepLocked(3) ? 'opacity-20 pointer-events-none grayscale' : activeStep === 3 ? 'scale-[1.02]' : ''}`}>
+                                        <div className="flex items-center gap-4 mb-8">
+                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-6">3</div>
+                                            <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">카드 갯수 설정</h2>
+                                        </div>
+                                        <div className="bg-orange-50/50 p-6 md:p-10 rounded-[40px] md:rounded-[50px] border-4 border-dashed border-orange-100 text-slate-900">
+                                            <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-8 font-black text-orange-600">
+                                               <div className="text-3xl md:text-6xl font-black">{config.cardCount}<span className="text-lg md:text-xl ml-1 font-bold">장</span></div>
+                                               <div className="bg-orange-500 text-white px-4 py-1.5 rounded-2xl text-[10px] md:text-sm shadow-md animate-pulse">총 {config.cardCount / 2}세트 구성</div>
+                                            </div>
+                                            <input type="range" min="8" max="24" step="2" value={config.cardCount} onChange={(e) => { setConfig({...config, cardCount: parseInt(e.target.value)}); setActiveStep(4); showToast(`${e.target.value}장 결정! 4단계 인원을 정해주세요. 👥`); }} className="w-full h-4 md:h-6 bg-white rounded-full appearance-none accent-orange-500 cursor-pointer shadow-inner border-4 border-white" />
+                                            <p className="mt-4 text-center text-orange-400 text-[10px] md:text-xs font-black italic">카드가 많을수록 기억력이 더 많이 필요해요! 🔥</p>
+                                        </div>
+                                    </section>
+
+                                    {/* 4단계 */}
+                                    <section className={`transition-all duration-500 ${isStepLocked(4) ? 'opacity-20 pointer-events-none grayscale' : activeStep === 4 ? 'scale-[1.02]' : ''}`}>
+                                        <div className="flex items-center gap-3 mb-6">
+                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform -rotate-6">4</div>
+                                            <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">참여 인원</h2>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-3 md:gap-6 text-slate-900">
+                                            {[1, 2, 3, 4].map(n => (
+                                                <button key={n} onClick={() => { setConfig({...config, playerCount: n}); setActiveStep(5); showToast(`${n}인 플레이! 마지막으로 내용을 적어주세요. ✏️`); }} className={`aspect-square rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center justify-center gap-1 md:gap-2 ${config.playerCount === n ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}>
+                                                    <Icon name="User" size={32} className={config.playerCount === n ? 'text-orange-500' : 'text-slate-300'} /><span className="font-black text-xs md:text-xl">{n === 1 ? '혼자' : `${n}인`}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </section>
+
+                                    {/* 5단계 */}
+                                    <section className={`bg-slate-50 rounded-[40px] md:rounded-[60px] p-6 md:p-14 border-4 border-slate-100 transition-all ${isStepLocked(5) ? 'opacity-20 pointer-events-none grayscale' : ''}`}>
+                                        <div className="flex flex-col md:flex-row md:items-center gap-3 mb-8 md:mb-12 pb-4 border-b-4 border-white">
+                                            <div className="flex items-center gap-3">
+                                              <div className={`w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-12`}>5</div>
+                                              <h2 className="font-black text-xl md:text-3xl text-slate-800">카드 내용 입력</h2>
+                                            </div>
+                                            {!isStepLocked(5) && <div className="mt-2 md:mt-0 md:ml-auto flex items-center gap-2 text-[10px] text-orange-600 bg-orange-100 px-4 py-2 rounded-full font-black animate-pulse"><Icon name="Sparkles" size={16} /> 바른 말 지킴이 AI 가동 중</div>}
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-10">
+                                            {config.contentType === 'picture' && config.pictureMode === 'upload' ? (
+                                                pictureInputs.slice(0, config.cardCount/2).map((val, idx) => (
+                                                    <div key={idx} className="flex flex-col gap-4 p-6 bg-white rounded-[40px] border-4 border-slate-100 shadow-sm transition-all focus-within:border-orange-300">
+                                                        <span className="text-[10px] font-black text-orange-400 italic">SET {idx + 1}</span>
+                                                        {config.gameType === 'associative' && (
+                                                            <input type="text" placeholder="글자 입력" value={val.a} onChange={(e) => { const n = [...pictureInputs]; n[idx].a = e.target.value; setPictureInputs(n); }} className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-black text-lg focus:bg-white focus:ring-4 focus:ring-orange-50" />
+                                                        )}
+                                                        <div className="relative overflow-hidden bg-slate-100 rounded-[35px] h-64 md:h-80 flex items-center justify-center border-4 border-dashed border-slate-200 hover:border-orange-400 transition-all group">
+                                                            {val.b ? <img src={val.b} className="w-full h-full object-contain p-4 group-hover:scale-105 transition-transform" /> : (
+                                                                <div className="flex flex-col items-center gap-3 text-slate-300"><Icon name="Upload" size={40} /><span className="text-xs font-black uppercase tracking-widest">Select Image</span></div>
+                                                            )}
+                                                            <input type="file" accept="image/*" onChange={(e) => handleFileUpload(idx, e.target.files[0])} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            ) : (config.contentType === 'word' || (config.contentType === 'picture' && config.pictureMode === 'ai')) ? (
+                                                (config.contentType === 'word' ? wordInputs : pictureInputs).slice(0, config.cardCount/2).map((val, idx) => (
+                                                    <div key={idx} className="p-6 bg-white rounded-[30px] border-4 border-slate-100 flex flex-col gap-3 shadow-sm focus-within:border-orange-300 transition-all">
+                                                        <span className="text-[10px] font-black text-slate-300 italic">SET {idx + 1}</span>
+                                                        <div className="flex flex-col md:flex-row gap-4">
+                                                            <input type="text" placeholder="입력" value={val.a} onChange={(e) => { const n = [...(config.contentType === 'word' ? wordInputs : pictureInputs)]; n[idx].a = e.target.value; (config.contentType === 'word' ? setWordInputs : setPictureInputs)(n); }} className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-black text-lg focus:bg-white" />
+                                                            {config.gameType === 'associative' && config.contentType === 'word' && (
+                                                                <div className="flex items-center gap-3">
+                                                                    <div className="hidden md:block bg-orange-100 p-2 rounded-full"><Icon name="ArrowRightLeft" size={16} /></div>
+                                                                    <input type="text" placeholder="짝 단어" value={val.b} onChange={(e) => { const n = [...wordInputs]; n[idx].b = e.target.value; setWordInputs(n); }} className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-black text-lg focus:bg-white" />
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            ) : (
+                                                config.contentType === 'fraction' && fractionInputs.slice(0, config.cardCount/2).map((val, idx) => (
+                                                    <div key={idx} className="p-6 bg-white rounded-[35px] border-4 border-slate-100 shadow-sm flex flex-col gap-4">
+                                                        <span className="text-[10px] font-black text-slate-300 italic">SET {idx + 1}</span>
+                                                        <div className="flex-1 bg-orange-50/50 p-6 rounded-[30px] flex items-center gap-4 shadow-inner border-2 border-orange-100">
+                                                            <input type="text" value={val.a.whole} placeholder="자" onChange={(e) => { const n = [...fractionInputs]; n[idx].a.whole = e.target.value; setFractionInputs(n); }} className="w-12 h-14 text-center text-xl font-black bg-white rounded-xl outline-none shadow-sm focus:ring-4 focus:ring-orange-100" />
+                                                            <div className="flex flex-col gap-1 flex-1">
+                                                                <input type="text" placeholder="분자" value={val.a.num} onChange={(e) => { const n = [...fractionInputs]; n[idx].a.num = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-orange-100" />
+                                                                <div className="h-1 bg-orange-200" />
+                                                                <input type="text" placeholder="분모" value={val.a.den} onChange={(e) => { const n = [...fractionInputs]; n[idx].a.den = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-orange-100" />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </section>
+                                    
+                                    <button disabled={isStepLocked(5)} onClick={handleStartRequest} className={`w-full py-8 md:py-10 rounded-[45px] shadow-xl md:shadow-[0_15px_0_0_#C2410C] transition-all active:scale-[0.97] active:translate-y-2 active:shadow-none text-xl md:text-3xl font-black text-white ${isStepLocked(5) ? 'bg-slate-100 text-slate-300' : 'bg-gradient-to-r from-orange-500 to-rose-500 hover:brightness-110'}`}><Icon name="Rocket" size={32} className="inline mr-4 animate-bounce" /> 지금 시작하기!</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 로딩 화면 */}
+                    {view === 'loading' && (
+                        <div className="min-h-screen bg-gradient-to-br from-orange-400 via-orange-500 to-rose-400 flex flex-col items-center justify-center p-6 text-white text-center animate-in">
+                            <div className="bg-white/20 p-8 md:p-14 rounded-[60px] md:rounded-[80px] backdrop-blur-xl border-4 border-white/30 shadow-2xl max-w-sm md:max-w-md w-full">
+                                <Icon name="Loader2" size={60} className="animate-spin mb-10 opacity-60 mx-auto" />
+                                <h2 className="text-xl md:text-3xl font-black mb-6 italic">{loadingStatus}</h2>
+                                <div className="w-full h-4 md:h-8 bg-white/20 rounded-full overflow-hidden mb-8 ring-4 ring-white/10 shadow-inner font-sans">
+                                    <div className="h-full bg-white transition-all duration-500 shadow-[0_0_20px_rgba(255,255,255,0.8)]" style={{ width: `${loadingProgress}%` }} />
+                                </div>
+                                <p className="text-white text-lg md:text-2xl font-black animate-pulse tracking-tight font-sans">잠시만 기다려 주세요.</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* AI 미리보기 */}
+                    {view === 'preview' && (
+                        <div className="min-h-screen bg-[#FFFBEB] flex flex-col p-4 md:p-16 items-center animate-in">
+                            <div className="max-w-5xl w-full bg-white rounded-[40px] md:rounded-[60px] shadow-2xl overflow-hidden border-8 md:border-[12px] border-white flex flex-col h-full text-slate-900">
+                                <div className="bg-emerald-500 p-8 md:p-14 text-center text-white">
+                                    <h2 className="text-2xl md:text-4xl font-black mb-2 tracking-tight font-sans">AI 그림 감상하기 👨‍🎨</h2>
+                                    <p className="opacity-80 text-sm md:text-xl font-bold tracking-tight">그림이 마음에 드시나요? 마음에 들면 게임을 시작해요!</p>
+                                </div>
+                                <div className="flex-1 p-6 md:p-14 overflow-y-auto bg-slate-50/50">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-10">
+                                        {cards.filter((c, i, a) => c.type === 'image' && a.findIndex(t => t.id === c.id) === i).map((set, idx) => (
+                                            <div key={idx} className="bg-white rounded-[35px] md:rounded-[45px] p-4 md:p-8 shadow-xl border-4 border-emerald-50 flex flex-col items-center gap-4 transition-all hover:scale-105">
+                                                <img src={set.content} className="w-full aspect-square object-contain bg-slate-100 rounded-[25px] md:rounded-[35px] p-2 shadow-inner" />
+                                                <div className="px-5 py-2 bg-emerald-500 text-white rounded-full font-black text-xs shadow-md">SET {idx + 1}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="p-6 md:p-14 bg-white border-t-4 border-slate-50 flex flex-col md:flex-row gap-4">
+                                    <button onClick={startMainGame} className="flex-[2] py-5 md:py-8 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[35px] md:rounded-[45px] shadow-xl font-black text-xl md:text-3xl transition-all active:scale-95">이 그림들로 시작!</button>
+                                    <button onClick={() => setView('settings')} className="flex-1 py-5 md:py-8 bg-slate-100 text-slate-400 rounded-[35px] md:rounded-[45px] font-black text-lg md:text-2xl transition-all active:scale-95">다시 준비</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 게임 플레이 */}
+                    {view === 'playing' && (
+                        <div className="min-h-screen bg-[#F1F5F9] flex flex-col p-4 md:p-10 font-sans overflow-x-hidden animate-in">
+                            <div className="max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 items-center justify-between mb-10 text-slate-900">
+                                <div className="flex gap-4">
+                                    {config.playerCount === 1 ? (
+                                        <div className="bg-white px-8 md:px-12 py-5 md:py-8 rounded-[40px] md:rounded-[55px] shadow-xl flex items-center gap-6 border-2 border-slate-100">
+                                            <div className={`p-4 rounded-3xl ${gameStarted ? 'bg-orange-100 animate-pulse' : 'bg-slate-50'}`}><Icon name="Timer" size={32} className={gameStarted ? 'text-orange-500' : 'text-slate-300'} /></div>
+                                            <div className="flex flex-col"><span className="text-[10px] font-black text-slate-400 tracking-widest uppercase">Timer</span><span className="text-3xl md:text-6xl font-black text-slate-800 tabular-nums font-mono leading-none">{Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span></div>
+                                        </div>
+                                    ) : (
+                                        scores.map((s, idx) => (
+                                            <div key={idx} className={`px-6 md:px-12 py-5 md:py-8 rounded-[40px] md:rounded-[55px] flex flex-col items-center transition-all ${currentPlayer === idx ? 'bg-orange-500 text-white shadow-[0_12px_0_0_#C2410C] -translate-y-2 ring-8 ring-orange-100 border-4 border-orange-300' : 'bg-white text-slate-400 opacity-60 shadow-sm'}`}>
+                                                <div className="flex items-center gap-2 mb-1 font-black text-[10px] uppercase"><Icon name="User" size={16} /> P{idx + 1}</div>
+                                                <span className="text-2xl md:text-5xl font-black leading-none">{s}점</span>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                                {config.playerCount > 1 && (
+                                   <div className="bg-white px-8 md:px-12 py-3 md:py-5 rounded-full border-4 border-orange-100 flex items-center gap-4 shadow-xl animate-bounce">
+                                      <Icon name="MousePointer2" size={24} className="text-orange-500" /><span className="font-black text-orange-900 text-base md:text-2xl tracking-tight">P{currentPlayer + 1}'s Turn!</span>
+                                   </div>
+                                )}
+                            </div>
+                            <div className={`max-w-6xl mx-auto w-full grid gap-4 md:gap-8 flex-1 ${config.cardCount > 16 ? 'grid-cols-4 md:grid-cols-6' : 'grid-cols-3 md:grid-cols-4'}`}>
+                                {cards.map((card, idx) => {
+                                    const isFlipped = flippedIndices.includes(idx) || matchedIds.includes(card.id);
+                                    const isMatched = matchedIds.includes(card.id);
+                                    return (
+                                        <div key={card.instanceId} onClick={() => handleCardClick(idx)} className="relative aspect-[3/4] cursor-pointer group transition-transform hover:scale-[1.03]">
+                                            <div className={`relative w-full h-full transition-transform duration-700 preserve-3d ${isFlipped ? 'rotate-y-180' : ''}`}>
+                                                <div className="absolute inset-0 backface-hidden flex items-center justify-center rounded-[25px] md:rounded-[45px] border-[6px] md:border-[10px] border-white shadow-2xl bg-gradient-to-br from-orange-400 to-rose-400 overflow-hidden group-hover:brightness-110">
+                                                    <Icon name="HelpCircle" size={48} className="text-white opacity-30" />
+                                                </div>
+                                                <div className={`absolute inset-0 backface-hidden rotate-y-180 flex items-center justify-center rounded-[25px] md:rounded-[45px] border-[6px] md:border-[10px] bg-white shadow-2xl ${isMatched ? 'border-emerald-400 bg-emerald-50' : 'border-slate-50'}`}>
+                                                    <div className={!isFlipped ? 'invisible' : 'visible w-full h-full flex items-center justify-center p-3 animate-in zoom-in duration-300'}>
+                                                        {card.type === 'image' ? <img src={card.content} className="max-w-full max-h-full object-contain rounded-2xl drop-shadow-sm" /> : 
+                                                         card.type === 'text' ? <span className="text-sm md:text-3xl font-black text-center break-all text-slate-800">{card.content}</span> : (
+                                                            <div className={`flex items-center gap-2 font-black ${isMatched ? 'text-emerald-600' : 'text-orange-600'}`}>
+                                                                {card.content.whole && <span className="text-2xl md:text-5xl">{card.content.whole}</span>}
+                                                                <div className="flex flex-col items-center">
+                                                                    <span className="text-xl md:text-4xl">{card.content.num}</span>
+                                                                    <div className={`h-1 md:h-1.5 w-full rounded-full ${isMatched ? 'bg-emerald-500' : 'bg-orange-500'}`} />
+                                                                    <span className="text-xl md:text-4xl">{card.content.den}</span>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 결과 화면 */}
+                    {view === 'result' && (
+                        <div className="min-h-screen bg-[#FFFBEB] flex flex-col items-center justify-center p-4 md:p-10 font-sans text-slate-900 overflow-hidden relative animate-in">
+                            <div className="fixed -left-[2000px] top-0">
+                                <div ref={resultRef} className="w-[800px] p-20 bg-white flex flex-col items-center border-[30px] border-orange-500 shadow-2xl relative font-sans">
+                                    <div className="w-full border-[6px] border-dashed border-orange-200 p-16 flex flex-col items-center text-center">
+                                        <div className="bg-orange-500 p-10 rounded-[55px] mb-10 shadow-2xl"><Icon name="Trophy" size={100} className="text-white" /></div>
+                                        <h1 className="text-7xl font-black mb-4 uppercase italic text-orange-600 tracking-tighter">Victory!</h1>
+                                        <div className="h-2 w-64 bg-orange-200 rounded-full mb-16" />
+                                        {config.playerCount === 1 ? (
+                                            <div className="text-center mb-16 font-black"><p className="text-orange-300 text-xl uppercase mb-6 tracking-[0.5em]">Memory Master</p><p className="text-9xl text-slate-800 font-black mb-6 tracking-tight">{userName || "대단한 어린이"}</p><p className="text-slate-400 text-3xl font-bold">위 어린이는 놀라운 기억력으로 놀이를 정복하였습니다.</p></div>
+                                        ) : (
+                                            <div className="w-full text-slate-800"><div className="text-center mb-16"><p className="text-9xl font-black uppercase italic tracking-tighter">Hall of Fame</p></div><div className="grid grid-cols-2 gap-12 w-full">{scores.map((s, i) => (<div key={i} className={`p-12 rounded-[65px] border-4 flex flex-col items-center ${scores[i] === Math.max(...scores) ? 'border-orange-500 bg-orange-50 shadow-2xl scale-105' : 'border-slate-100 bg-slate-50'}`}><p className={`text-3xl font-black mb-4 ${scores[i] === Math.max(...scores) ? 'text-orange-600' : 'text-slate-400'}`}>PLAYER {i+1}</p><span className="text-8xl font-black">{s}점</span></div>))}</div></div>
+                                        )}
+                                        <div className="mt-24 flex justify-between w-full text-slate-300 font-black italic uppercase text-xl font-mono"><span>MEMORY GAME MAKER</span><span>{new Date().toLocaleDateString()}</span></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="relative z-10 flex flex-col items-center max-w-2xl w-full bg-white/95 backdrop-blur-3xl p-10 md:p-20 rounded-[60px] md:rounded-[80px] border-8 border-white shadow-[0_30px_0_0_#FEF3C7] text-slate-900 font-sans">
+                                <div className="w-24 h-24 md:w-36 md:h-36 bg-gradient-to-br from-orange-400 to-rose-400 rounded-[50px] flex items-center justify-center shadow-2xl mb-8 animate-bounce"><Icon name="Trophy" size={64} className="text-white" /></div>
+                                <h2 className="text-4xl md:text-7xl font-black mb-6 uppercase tracking-tighter">Mission Clear!</h2>
+                                <div className="w-full mb-10 md:mb-16 bg-slate-50/50 p-8 md:p-14 rounded-[50px] border-4 border-white shadow-inner">
+                                    {config.playerCount === 1 ? (
+                                        <div className="flex flex-col items-center gap-6 md:gap-12"><input type="text" placeholder="친구의 이름을 적어주세요!" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full bg-white border-4 border-orange-100 rounded-[35px] py-5 md:py-8 text-center text-xl md:text-4xl font-black outline-none focus:border-orange-500 shadow-sm transition-all" /><span className="text-6xl md:text-9xl font-black text-orange-500 tabular-nums leading-none tracking-tighter font-mono">{Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span></div>
+                                    ) : (
+                                        <div className="grid grid-cols-2 gap-6 md:gap-10 tabular-nums font-mono font-sans">{scores.map((s, i) => (<div key={i} className={`p-6 md:p-10 rounded-[45px] md:rounded-[60px] border-4 flex flex-col items-center transition-all ${scores[i] === Math.max(...scores) ? 'bg-orange-500 text-white shadow-xl scale-105' : 'bg-white border-slate-200 text-slate-300 opacity-60'}`}><span className="text-[10px] md:text-xs font-black uppercase mb-2 tracking-widest">P{i+1} {scores[i] === Math.max(...scores) && '🏆'}</span><span className="text-3xl md:text-6xl font-black leading-none">{s}점</span><span className="text-[10px] font-black opacity-60 mt-2">시도: {attempts[i]}회</span></div>))}</div>
+                                    )}
+                                </div>
+                                <div className="flex flex-col gap-6 w-full max-w-md font-black">
+                                    <button onClick={handleCapture} disabled={isCapturing} className="w-full py-6 md:py-8 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[40px] shadow-[0_10px_0_0_#059669] flex items-center justify-center gap-4 transition-all active:scale-95 text-xl md:text-3xl tracking-tight">상장 이미지 만들기</button>
+                                    <div className="flex gap-4"><button onClick={() => prepareGameData()} className="flex-1 py-5 md:py-7 bg-white text-orange-600 border-4 border-orange-100 rounded-[40px] shadow-[0_8px_0_0_#FED7AA] font-black text-lg md:text-2xl active:translate-y-1 active:shadow-none transition-all">다시하기</button><button onClick={() => { setActiveStep(1); setView('settings'); setConfig({ cardCount: 12, contentType: null, pictureMode: null, gameType: null, playerCount: null }); }} className="flex-1 py-5 md:py-7 bg-orange-500 text-white rounded-[40px] shadow-[0_8px_0_0_#C2410C] font-black text-lg md:text-2xl active:translate-y-1 active:shadow-none transition-all">설정</button></div>
+                                </div>
+                            </div>
+                            
+                            {capturedImage && (
+                                <div className="fixed inset-0 z-[120] bg-orange-950/70 backdrop-blur-md flex flex-col items-center justify-center p-4 font-sans animate-in" onClick={() => setCapturedImage(null)}>
+                                    <div className="relative max-w-lg w-full bg-white rounded-[50px] p-3 shadow-2xl border-8 md:border-[12px] border-white" onClick={e => e.stopPropagation()}>
+                                       <img src={capturedImage} className="w-full h-auto rounded-[35px] md:rounded-[45px]" />
+                                       <div className="absolute bottom-10 left-0 right-0 px-8 py-2 text-center"><div className="inline-block bg-orange-500 text-white px-8 py-3 rounded-full font-black text-xs md:text-sm shadow-xl animate-bounce">이미지를 꾹 눌러 저장하세요! 📸</div></div>
+                                       <button onClick={() => setCapturedImage(null)} className="absolute top-6 right-6 bg-black/50 text-white p-2 rounded-full hover:bg-black uppercase font-black"><Icon name="X" size={20} /></button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
