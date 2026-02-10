@@ -41,7 +41,7 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // 아이콘 컴포넌트 (가장 안전한 i 태그 방식)
+        // 아이콘 컴포넌트 (가장 안전한 i 태그 기반 렌더링)
         const Icon = ({ name, size = 24, className = "" }) => {
             const kebabName = name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
             return (
@@ -54,10 +54,8 @@
         };
 
         const App = () => {
-            // API 키 설정 (배포 시 본인의 키를 입력하세요)
-            const apiKey = ""; 
+            const apiKey = ""; // Google AI Studio에서 발급받은 키를 여기에 넣으세요
 
-            // --- 1. 상태 관리 ---
             const [view, setView] = useState('settings'); 
             const [activeStep, setActiveStep] = useState(1); 
             const [toast, setToast] = useState({ show: false, message: "" });
@@ -93,15 +91,12 @@
             const timerRef = useRef(null);
             const resultRef = useRef(null);
 
-            // 아이콘 초기화 루틴
-            useEffect(() => {
-                if (window.lucide) {
-                    window.lucide.createIcons();
-                }
-            });
-
             const isStepLocked = (step) => activeStep < step;
             const showToast = (message) => setToast({ show: true, message });
+
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            });
 
             useEffect(() => {
                 if (toast.show) {
@@ -118,7 +113,6 @@
                         const diff = pairCount - newArr.length;
                         const add = Array.from({ length: diff }, () => {
                             if (type === 'fraction') return { a: { whole: '', num: '', den: '' }, b: { whole: '', num: '', den: '' } };
-                            if (type === 'picture') return { a: '', b: null };
                             return { a: '', b: '' };
                         });
                         return [...newArr, ...add];
@@ -151,13 +145,14 @@
             };
 
             const fetchAiImage = async (prompt) => {
+                if (!apiKey) return null;
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
                 try {
                     const response = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            instances: [{ prompt: `${prompt}, simple cute educational game icon, pastel colors, white background` }],
+                            instances: [{ prompt: `${prompt}, cute simple educational game icon, pastel colors, white background` }],
                             parameters: { sampleCount: 1 }
                         })
                     });
@@ -166,62 +161,17 @@
                 } catch (e) { return null; }
             };
 
-            const checkContentSafety = async (textList) => {
-                if (!apiKey || textList.length === 0) return true;
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-                const prompt = `다음 리스트에 비속어/욕설이 있나요? 있으면 'FAIL', 안전하면 'PASS'. 리스트: [${textList.join(', ')}]`;
-                try {
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                    });
-                    const data = await response.json();
-                    return data.candidates?.[0]?.content?.parts?.[0]?.text?.toUpperCase().includes('PASS');
-                } catch (e) { return true; }
-            };
-
             const handleStartRequest = async () => {
-                const pairCount = config.cardCount / 2;
-                let errors = [];
-                let texts = [];
-
-                if (config.contentType === 'word') {
-                    wordInputs.slice(0, pairCount).forEach((v, i) => {
-                        if (!v.a.trim() || (config.gameType === 'associative' && !v.b.trim())) errors.push(i + 1);
-                        else { texts.push(v.a); if (v.b) texts.push(v.b); }
-                    });
-                } else if (config.contentType === 'picture') {
-                    pictureInputs.slice(0, pairCount).forEach((v, i) => {
-                        if (config.pictureMode === 'ai' && !v.a.trim()) errors.push(i + 1);
-                        else if (config.pictureMode === 'upload' && !v.b) errors.push(i + 1);
-                        else if (v.a) texts.push(v.a);
-                    });
-                } else if (config.contentType === 'fraction') {
-                    fractionInputs.slice(0, pairCount).forEach((v, i) => {
-                        if (!v.a.num || !v.a.den) errors.push(i + 1);
-                    });
-                }
-
-                if (errors.length > 0) { setErrorMessage(`${errors.join(', ')}번 정보를 모두 채워주세요!`); return; }
-
-                setLoadingStatus("안전한 단어인지 검사 중...");
-                setView('loading');
-                const isSafe = await checkContentSafety(texts);
-                if (!isSafe) { setView('settings'); setErrorMessage("부적절한 단어가 있어요! 바른 말로 고쳐주세요."); return; }
-                
-                prepareGameData();
-            };
-
-            const prepareGameData = async () => {
                 setLoadingStatus("놀이 준비 중...");
-                setLoadingProgress(20);
+                setView('loading');
+                setLoadingProgress(10);
+                
                 const pairCount = config.cardCount / 2;
                 let deck = [];
 
                 if (config.contentType === 'picture' && config.pictureMode === 'ai') {
                     for (let i = 0; i < pairCount; i++) {
-                        setLoadingStatus(`AI가 ${i+1}번째 카드를 그려요... 🎨`);
+                        setLoadingStatus(`AI 화가가 ${i+1}번째 카드 그림을 그려요! 🎨`);
                         const img = await fetchAiImage(pictureInputs[i].a);
                         const content = img || 'https://via.placeholder.com/150?text=Error';
                         if (config.gameType === 'associative') {
@@ -231,12 +181,13 @@
                             deck.push({ id: i, content: content, type: 'image', instanceId: Math.random() });
                             deck.push({ id: i, content: content, type: 'image', instanceId: Math.random() });
                         }
-                        setLoadingProgress(20 + Math.floor((i+1)/pairCount * 80));
+                        setLoadingProgress(10 + Math.floor(((i+1)/pairCount) * 80));
                     }
-                    setCards(deck);
+                    setCards(deck.sort(() => Math.random() - 0.5));
+                    setLoadingProgress(100);
                     setView('preview');
                 } else {
-                    if (config.contentType === 'picture') {
+                    if (config.contentType === 'picture' && config.pictureMode === 'upload') {
                         for (let i = 0; i < pairCount; i++) {
                             if (config.gameType === 'associative') {
                                 deck.push({ id: i, content: pictureInputs[i].a, type: 'text', instanceId: Math.random() });
@@ -251,7 +202,7 @@
                             deck.push({ id: i, content: v.a, type: 'text', instanceId: Math.random() });
                             deck.push({ id: i, content: config.gameType === 'identical' ? v.a : v.b, type: 'text', instanceId: Math.random() });
                         });
-                    } else {
+                    } else if (config.contentType === 'fraction') {
                         fractionInputs.slice(0, pairCount).forEach((v, i) => {
                             deck.push({ id: i, content: v.a, type: 'fraction', instanceId: Math.random() });
                             deck.push({ id: i, content: config.gameType === 'identical' ? v.a : v.b, type: 'fraction', instanceId: Math.random() });
@@ -264,7 +215,6 @@
             };
 
             const startMainGame = () => {
-                if (config.contentType === 'picture') setCards(prev => [...prev].sort(() => Math.random() - 0.5));
                 setScores(Array(config.playerCount || 1).fill(0));
                 setAttempts(Array(config.playerCount || 1).fill(0));
                 setCurrentPlayer(0);
@@ -313,21 +263,19 @@
                 }, 100);
             };
 
-            // --- UI 렌더링 시작 ---
             return (
-                <div className="min-h-screen selection:bg-orange-200 antialiased overflow-x-hidden">
-                    {/* 설정 화면 */}
+                <div className="min-h-screen selection:bg-orange-200 antialiased overflow-x-hidden font-sans">
                     {view === 'settings' && (
                         <div className="flex flex-col items-center py-6 md:py-10 px-4 animate-in">
                             {toast.show && (
-                                <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-orange-600 text-white px-8 py-4 rounded-full shadow-2xl flex items-center gap-3 animate-bounce max-w-[90vw]">
-                                    <Icon name="Star" size={20} className="text-white fill-white" />
+                                <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-orange-600 text-white px-8 py-4 rounded-full shadow-xl flex items-center gap-3 animate-bounce max-w-[90vw]">
+                                    <Icon name="Star" size={20} className="fill-white" />
                                     <span className="font-black text-sm md:text-lg tracking-tight">{toast.message}</span>
                                 </div>
                             )}
-                            <div className="w-full max-w-4xl bg-white rounded-[45px] md:rounded-[60px] shadow-[0_20px_0_0_#FEF3C7] border-[6px] md:border-[10px] border-white overflow-hidden relative">
+                            <div className="w-full max-w-4xl bg-white rounded-[45px] md:rounded-[60px] shadow-[0_15px_0_0_#FEF3C7] border-[6px] md:border-[10px] border-white overflow-hidden relative">
                                 <div className="bg-gradient-to-br from-orange-400 via-orange-500 to-rose-400 p-8 md:p-14 text-center text-white">
-                                    <h1 className="text-2xl md:text-5xl font-black mb-3 italic flex justify-center items-center gap-4">
+                                    <h1 className="text-2xl md:text-5xl font-black mb-2 italic flex justify-center items-center gap-4">
                                         <Icon name="Rocket" size={36} className="text-white" /> 메모리 게임 메이커
                                     </h1>
                                     <p className="bg-white/20 px-6 py-2 rounded-full inline-block text-[10px] md:text-sm font-black italic tracking-tight">나만의 특별한 카드로 즐기는 학습 놀이 도구</p>
@@ -336,139 +284,151 @@
                                 <div className="p-6 md:p-14 space-y-10 md:space-y-16">
                                     {/* 1단계 */}
                                     <section className={`transition-all duration-500 ${activeStep === 1 ? 'scale-[1.02]' : ''}`}>
-                                        <div className="flex items-center gap-3 mb-6">
-                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-3">1</div>
-                                            <h2 className="text-lg md:text-2xl font-black text-slate-800 tracking-tight">게임 모드를 선택해주세요</h2>
+                                        <div className="flex items-center gap-3 mb-6 text-slate-800">
+                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-3 font-sans">1</div>
+                                            <h2 className="text-lg md:text-2xl font-black font-sans">게임 모드를 선택해주세요</h2>
                                             {activeStep > 1 && <Icon name="CheckCircle2" size={24} className="ml-auto text-emerald-500" />}
                                         </div>
                                         <div className="grid grid-cols-2 gap-4 md:gap-8">
-                                            <div className="flex flex-col gap-3">
-                                                <button onClick={() => { setConfig({...config, gameType: 'identical'}); setActiveStep(2); showToast("똑같은 모양 찾기 선택! 2단계 주제를 골라주세요. 🎨"); }} className={`p-4 md:p-8 rounded-[35px] md:rounded-[50px] border-4 transition-all flex flex-col items-center gap-3 ${config.gameType === 'identical' ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}>
+                                            <div className="flex flex-col gap-2 text-center text-slate-900 font-sans">
+                                                <button onClick={() => { setConfig({...config, gameType: 'identical'}); setActiveStep(2); showToast("똑같은 모양 찾기 모드 선택! 🎨"); }} className={`p-4 md:p-8 rounded-[30px] border-4 transition-all flex flex-col items-center gap-3 ${config.gameType === 'identical' ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300'}`}>
                                                     <Icon name="Copy" size={40} className={config.gameType === 'identical' ? 'text-orange-500' : 'text-slate-300'} />
-                                                    <span className="text-sm md:text-2xl font-black">똑같은 카드</span>
+                                                    <span className="text-sm md:text-xl font-black font-sans">똑같은 카드</span>
                                                 </button>
-                                                <p className="text-[10px] md:text-xs font-bold text-center text-slate-400 px-2">똑같은 그림 2장을 찾는 가장 쉬운 방식!</p>
+                                                <p className="text-[10px] text-slate-400 font-bold font-sans">똑같은 그림 2장을 찾아요!</p>
                                             </div>
-                                            <div className="flex flex-col gap-3">
-                                                <button onClick={() => { setConfig({...config, gameType: 'associative'}); setActiveStep(2); showToast("의미가 같은 짝 찾기 선택! 2단계 주제를 골라보세요. 🎨"); }} className={`p-4 md:p-8 rounded-[35px] md:rounded-[50px] border-4 transition-all flex flex-col items-center gap-3 ${config.gameType === 'associative' ? 'border-rose-500 bg-rose-50 text-rose-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}>
+                                            <div className="flex flex-col gap-2 text-center text-slate-900 font-sans">
+                                                <button onClick={() => { setConfig({...config, gameType: 'associative'}); setActiveStep(2); showToast("의미가 같은 짝 찾기 선택! 🎨"); }} className={`p-4 md:p-8 rounded-[30px] border-4 transition-all flex flex-col items-center gap-3 ${config.gameType === 'associative' ? 'border-rose-500 bg-rose-50 text-rose-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300'}`}>
                                                     <Icon name="ArrowRightLeft" size={40} className={config.gameType === 'associative' ? 'text-rose-500' : 'text-slate-300'} />
-                                                    <span className="text-sm md:text-2xl font-black">의미가 같은 카드</span>
+                                                    <span className="text-sm md:text-xl font-black font-sans">의미가 같은 카드</span>
                                                 </button>
-                                                <p className="text-[10px] md:text-xs font-bold text-center text-slate-400 px-2">단어와 뜻처럼 서로 짝을 맞추는 방식!</p>
+                                                <p className="text-[10px] text-slate-400 font-bold font-sans">단어와 뜻처럼 서로 짝을 맞춰요!</p>
                                             </div>
                                         </div>
                                     </section>
 
                                     {/* 2단계 */}
-                                    <section className={`transition-all duration-500 ${isStepLocked(2) ? 'opacity-20 pointer-events-none grayscale' : activeStep === 2 ? 'scale-[1.02]' : ''}`}>
-                                        <div className="flex items-center gap-4 mb-8">
+                                    <section className={`transition-all duration-500 ${isStepLocked(2) ? 'opacity-20 pointer-events-none grayscale' : ''}`}>
+                                        <div className="flex items-center gap-3 mb-6 text-slate-800 font-sans">
                                             <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform -rotate-3">2</div>
-                                            <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">카드 게임 주제</h2>
+                                            <h2 className="text-lg md:text-2xl font-black">카드 게임 주제</h2>
                                         </div>
-                                        <div className="grid grid-cols-3 gap-3 md:gap-6">
-                                            <button onClick={() => { setConfig({...config, contentType: 'word'}); setActiveStep(3); showToast("단어 모드 선택! 3단계에서 카드 개수를 정해주세요. 🔢"); }} className={`p-4 md:p-6 rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'word' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-100 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}><Icon name="FileText" size={32} /><span className="font-black text-xs md:text-xl">단어</span></button>
-                                            <button onClick={() => { setConfig({...config, contentType: 'fraction'}); setActiveStep(3); showToast("분수 모드 선택! 3단계에서 카드 개수를 정해주세요. 🔢"); }} className={`p-4 md:p-6 rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'fraction' ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-100 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}><div className="font-black flex flex-col items-center leading-none"><span>1</span><div className="h-0.5 w-6 bg-current" /><span>2</span></div><span className="font-black text-xs md:text-xl">분수</span></button>
-                                            <button onClick={() => { setConfig({...config, contentType: 'picture'}); }} className={`p-4 md:p-6 rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'picture' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}><Icon name="ImageIcon" size={32} /><span className="font-black text-xs md:text-xl">그림</span></button>
+                                        <div className="grid grid-cols-3 gap-3 text-slate-900 font-sans">
+                                            <button onClick={() => { setConfig({...config, contentType: 'word'}); setActiveStep(3); showToast("단어 모드 선택! 🔢"); }} className={`p-4 rounded-3xl border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'word' ? 'border-orange-500 bg-orange-50 text-orange-700 font-sans' : 'border-slate-50 bg-slate-50 text-slate-300 font-sans'}`}><Icon name="FileText" size={24} /><span className="font-black text-xs md:text-lg">단어</span></button>
+                                            <button onClick={() => { setConfig({...config, contentType: 'fraction'}); setActiveStep(3); showToast("분수 모드 선택! 🔢"); }} className={`p-4 rounded-3xl border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'fraction' ? 'border-amber-500 bg-amber-50 text-amber-700 font-sans' : 'border-slate-50 bg-slate-50 text-slate-300 font-sans'}`}><div className="flex flex-col items-center leading-none font-black"><span>1</span><div className="h-0.5 w-4 bg-current" /><span>2</span></div><span className="font-black text-xs md:text-lg">분수</span></button>
+                                            <button onClick={() => { setConfig({...config, contentType: 'picture'}); }} className={`p-4 rounded-3xl border-4 transition-all flex flex-col items-center gap-2 ${config.contentType === 'picture' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-sans' : 'border-slate-50 bg-slate-50 text-slate-300 font-sans'}`}><Icon name="ImageIcon" size={24} /><span className="font-black text-xs md:text-lg">그림</span></button>
                                         </div>
                                         {config.contentType === 'picture' && (
                                             <div className="flex gap-4 mt-6 animate-in">
-                                                <div className="flex-1 flex flex-col gap-2"><button onClick={() => { setConfig({...config, pictureMode: 'ai'}); setActiveStep(3); showToast("AI가 마법처럼 그림을 그려요! ✨"); }} className={`w-full py-4 rounded-3xl border-4 flex items-center justify-center gap-2 font-black text-xs md:text-sm ${config.pictureMode === 'ai' ? 'bg-emerald-50 border-emerald-500 text-emerald-600' : 'bg-white border-slate-100 text-slate-300'}`}><Icon name="Sparkles" size={16} /> AI 화가</button><p className="text-[9px] text-center text-slate-400 font-bold">단어만 쓰면 그려요!</p></div>
-                                                <div className="flex-1 flex flex-col gap-2"><button onClick={() => { setConfig({...config, pictureMode: 'upload'}); setActiveStep(3); showToast("내 사진으로 카드를 만들어요! 📸"); }} className={`w-full py-4 rounded-3xl border-4 flex items-center justify-center gap-2 font-black text-xs md:text-sm ${config.pictureMode === 'upload' ? 'bg-emerald-50 border-emerald-500 text-emerald-600' : 'bg-white border-slate-100 text-slate-300'}`}><Icon name="Upload" size={16} /> 직접 올리기</button><p className="text-[9px] text-center text-slate-400 font-bold">내 사진을 써요!</p></div>
+                                                <button onClick={() => { setConfig({...config, pictureMode: 'ai'}); setActiveStep(3); showToast("AI가 마법처럼 그림을 그려요! ✨"); }} className={`flex-1 py-4 rounded-2xl border-4 flex flex-col items-center gap-1 font-black text-xs ${config.pictureMode === 'ai' ? 'bg-emerald-100 border-emerald-500 text-emerald-700' : 'bg-white border-slate-100 text-slate-300'}`}><Icon name="Sparkles" size={16} /> AI 화가</button>
+                                                <button onClick={() => { setConfig({...config, pictureMode: 'upload'}); setActiveStep(3); showToast("직접 사진 올리기 모드! 📸"); }} className={`flex-1 py-4 rounded-2xl border-4 flex flex-col items-center gap-1 font-black text-xs ${config.pictureMode === 'upload' ? 'bg-emerald-100 border-emerald-500 text-emerald-700' : 'bg-white border-slate-100 text-slate-300'}`}><Icon name="Upload" size={16} /> 직접 올리기</button>
                                             </div>
                                         )}
                                     </section>
 
                                     {/* 3단계 */}
-                                    <section className={`transition-all duration-500 ${isStepLocked(3) ? 'opacity-20 pointer-events-none grayscale' : activeStep === 3 ? 'scale-[1.02]' : ''}`}>
-                                        <div className="flex items-center gap-4 mb-8">
-                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-6">3</div>
-                                            <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">카드 갯수 설정</h2>
+                                    <section className={`transition-all duration-500 ${isStepLocked(3) ? 'opacity-20 pointer-events-none' : ''}`}>
+                                        <div className="flex items-center gap-3 mb-6 text-slate-800 font-sans font-black">
+                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-6 font-sans font-black">3</div>
+                                            <h2 className="text-lg md:text-2xl font-black">카드 갯수 설정</h2>
                                         </div>
-                                        <div className="bg-orange-50/50 p-6 md:p-10 rounded-[40px] md:rounded-[50px] border-4 border-dashed border-orange-100 text-slate-900">
-                                            <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-8 font-black text-orange-600">
-                                               <div className="text-3xl md:text-6xl font-black">{config.cardCount}<span className="text-lg md:text-xl ml-1 font-bold">장</span></div>
-                                               <div className="bg-orange-500 text-white px-4 py-1.5 rounded-2xl text-[10px] md:text-sm shadow-md animate-pulse">총 {config.cardCount / 2}세트 구성</div>
+                                        <div className="bg-orange-50/50 p-6 rounded-[40px] border-4 border-dashed border-orange-100 text-slate-900 font-sans font-black">
+                                            <div className="flex justify-between items-end mb-6 font-black text-orange-600">
+                                               <span className="text-3xl md:text-5xl font-black">{config.cardCount}<span className="text-lg">장</span></span>
+                                               <span className="text-xs bg-orange-500 text-white px-3 py-1 rounded-full shadow-md animate-pulse font-sans font-black">총 {config.cardCount / 2}세트</span>
                                             </div>
-                                            <input type="range" min="8" max="24" step="2" value={config.cardCount} onChange={(e) => { setConfig({...config, cardCount: parseInt(e.target.value)}); setActiveStep(4); showToast(`${e.target.value}장 결정! 4단계 인원을 정해주세요. 👥`); }} className="w-full h-4 md:h-6 bg-white rounded-full appearance-none accent-orange-500 cursor-pointer shadow-inner border-4 border-white" />
-                                            <p className="mt-4 text-center text-orange-400 text-[10px] md:text-xs font-black italic">카드가 많을수록 기억력이 더 많이 필요해요! 🔥</p>
+                                            <input type="range" min="8" max="24" step="2" value={config.cardCount} onChange={(e) => { setConfig({...config, cardCount: parseInt(e.target.value)}); setActiveStep(4); showToast("인원수를 골라주세요! 👥"); }} className="w-full h-4 bg-white rounded-full appearance-none accent-orange-500 cursor-pointer shadow-inner" />
                                         </div>
                                     </section>
 
                                     {/* 4단계 */}
-                                    <section className={`transition-all duration-500 ${isStepLocked(4) ? 'opacity-20 pointer-events-none grayscale' : activeStep === 4 ? 'scale-[1.02]' : ''}`}>
-                                        <div className="flex items-center gap-3 mb-6">
-                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform -rotate-6">4</div>
-                                            <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">참여 인원</h2>
+                                    <section className={`transition-all duration-500 ${isStepLocked(4) ? 'opacity-20 pointer-events-none' : ''}`}>
+                                        <div className="flex items-center gap-3 mb-6 text-slate-800 font-sans font-black">
+                                            <div className="w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform -rotate-6 font-sans font-black">4</div>
+                                            <h2 className="text-lg md:text-2xl font-black">참여 인원</h2>
                                         </div>
-                                        <div className="grid grid-cols-4 gap-3 md:gap-6 text-slate-900">
+                                        <div className="grid grid-cols-4 gap-2 md:gap-4 text-slate-900 font-sans font-black font-black">
                                             {[1, 2, 3, 4].map(n => (
-                                                <button key={n} onClick={() => { setConfig({...config, playerCount: n}); setActiveStep(5); showToast(`${n}인 플레이! 마지막으로 내용을 적어주세요. ✏️`); }} className={`aspect-square rounded-[25px] md:rounded-[40px] border-4 transition-all flex flex-col items-center justify-center gap-1 md:gap-2 ${config.playerCount === n ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-md' : 'border-slate-50 bg-slate-50 text-slate-300 hover:bg-white active:scale-95'}`}>
-                                                    <Icon name="User" size={32} className={config.playerCount === n ? 'text-orange-500' : 'text-slate-300'} /><span className="font-black text-xs md:text-xl">{n === 1 ? '혼자' : `${n}인`}</span>
-                                                </button>
+                                                <button key={n} onClick={() => { setConfig({...config, playerCount: n}); setActiveStep(5); showToast("마지막! 내용을 적어주세요. ✏️"); }} className={`aspect-square rounded-[20px] md:rounded-[30px] border-4 transition-all flex flex-col items-center justify-center gap-1 ${config.playerCount === n ? 'border-orange-500 bg-orange-50 text-orange-700 shadow-md font-sans font-black' : 'border-slate-50 bg-slate-50 text-slate-300 active:scale-95 font-sans font-black'}`}><Icon name="User" size={24} /><span className="font-black text-xs md:text-lg">{n === 1 ? '혼자' : `${n}인`}</span></button>
                                             ))}
                                         </div>
                                     </section>
 
-                                    {/* 5단계 */}
-                                    <section className={`bg-slate-50 rounded-[40px] md:rounded-[60px] p-6 md:p-14 border-4 border-slate-100 transition-all ${isStepLocked(5) ? 'opacity-20 pointer-events-none grayscale' : ''}`}>
-                                        <div className="flex flex-col md:flex-row md:items-center gap-3 mb-8 md:mb-12 pb-4 border-b-4 border-white">
-                                            <div className="flex items-center gap-3">
-                                              <div className={`w-10 h-10 md:w-12 md:h-12 bg-orange-500 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg transform rotate-12`}>5</div>
-                                              <h2 className="font-black text-xl md:text-3xl text-slate-800">카드 내용 입력</h2>
-                                            </div>
-                                            {!isStepLocked(5) && <div className="mt-2 md:mt-0 md:ml-auto flex items-center gap-2 text-[10px] text-orange-600 bg-orange-100 px-4 py-2 rounded-full font-black animate-pulse"><Icon name="Sparkles" size={16} /> 바른 말 지킴이 AI 가동 중</div>}
+                                    {/* 5단계: 내용 입력 (오류 해결 및 문구 수정) */}
+                                    <section className={`bg-slate-50 rounded-[40px] p-6 md:p-14 border-4 border-slate-100 transition-all ${isStepLocked(5) ? 'opacity-20 pointer-events-none' : ''}`}>
+                                        <div className="flex items-center gap-3 mb-8 pb-4 border-b-4 border-white text-slate-800 font-sans font-black font-black">
+                                            <div className="w-8 h-8 md:w-10 md:h-10 bg-orange-500 rounded-xl flex items-center justify-center text-white font-black font-sans font-black">5</div>
+                                            <h2 className="font-black text-lg md:text-2xl font-sans font-black">카드 내용 입력</h2>
                                         </div>
-
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-10">
-                                            {config.contentType === 'picture' && config.pictureMode === 'upload' ? (
-                                                pictureInputs.slice(0, config.cardCount/2).map((val, idx) => (
-                                                    <div key={idx} className="flex flex-col gap-4 p-6 bg-white rounded-[40px] border-4 border-slate-100 shadow-sm transition-all focus-within:border-orange-300">
-                                                        <span className="text-[10px] font-black text-orange-400 italic">SET {idx + 1}</span>
-                                                        {config.gameType === 'associative' && (
-                                                            <input type="text" placeholder="글자 입력" value={val.a} onChange={(e) => { const n = [...pictureInputs]; n[idx].a = e.target.value; setPictureInputs(n); }} className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-black text-lg focus:bg-white focus:ring-4 focus:ring-orange-50" />
-                                                        )}
-                                                        <div className="relative overflow-hidden bg-slate-100 rounded-[35px] h-64 md:h-80 flex items-center justify-center border-4 border-dashed border-slate-200 hover:border-orange-400 transition-all group">
-                                                            {val.b ? <img src={val.b} className="w-full h-full object-contain p-4 group-hover:scale-105 transition-transform" /> : (
-                                                                <div className="flex flex-col items-center gap-3 text-slate-300"><Icon name="Upload" size={40} /><span className="text-xs font-black uppercase tracking-widest">Select Image</span></div>
-                                                            )}
-                                                            <input type="file" accept="image/*" onChange={(e) => handleFileUpload(idx, e.target.files[0])} className="absolute inset-0 opacity-0 cursor-pointer" />
-                                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-slate-900 font-sans font-black">
+                                            {config.contentType === 'picture' && pictureInputs.slice(0, config.cardCount/2).map((val, idx) => (
+                                                <div key={idx} className="flex flex-col gap-4 p-4 bg-white rounded-3xl border-4 border-slate-100 shadow-sm transition-all focus-within:border-orange-300 font-sans font-black">
+                                                    <span className="text-[10px] font-black text-orange-400 italic">SET {idx + 1}</span>
+                                                    <div className="flex flex-col gap-1">
+                                                        <label className="text-[10px] font-black text-slate-300 ml-2 uppercase">
+                                                            {config.pictureMode === 'ai' ? 'AI 그림 키워드' : '글자 카드'}
+                                                        </label>
+                                                        <input type="text" placeholder="단어 입력" value={val.a} onChange={(e) => { const n = [...pictureInputs]; n[idx].a = e.target.value; setPictureInputs(n); }} className="w-full bg-slate-50 p-3 rounded-xl outline-none font-black text-sm" />
                                                     </div>
-                                                ))
-                                            ) : (config.contentType === 'word' || (config.contentType === 'picture' && config.pictureMode === 'ai')) ? (
-                                                (config.contentType === 'word' ? wordInputs : pictureInputs).slice(0, config.cardCount/2).map((val, idx) => (
-                                                    <div key={idx} className="p-6 bg-white rounded-[30px] border-4 border-slate-100 flex flex-col gap-3 shadow-sm focus-within:border-orange-300 transition-all">
-                                                        <span className="text-[10px] font-black text-slate-300 italic">SET {idx + 1}</span>
-                                                        <div className="flex flex-col md:flex-row gap-4">
-                                                            <input type="text" placeholder="입력" value={val.a} onChange={(e) => { const n = [...(config.contentType === 'word' ? wordInputs : pictureInputs)]; n[idx].a = e.target.value; (config.contentType === 'word' ? setWordInputs : setPictureInputs)(n); }} className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-black text-lg focus:bg-white" />
-                                                            {config.gameType === 'associative' && config.contentType === 'word' && (
-                                                                <div className="flex items-center gap-3">
-                                                                    <div className="hidden md:block bg-orange-100 p-2 rounded-full"><Icon name="ArrowRightLeft" size={16} /></div>
-                                                                    <input type="text" placeholder="짝 단어" value={val.b} onChange={(e) => { const n = [...wordInputs]; n[idx].b = e.target.value; setWordInputs(n); }} className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-black text-lg focus:bg-white" />
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                ))
-                                            ) : (
-                                                config.contentType === 'fraction' && fractionInputs.slice(0, config.cardCount/2).map((val, idx) => (
-                                                    <div key={idx} className="p-6 bg-white rounded-[35px] border-4 border-slate-100 shadow-sm flex flex-col gap-4">
-                                                        <span className="text-[10px] font-black text-slate-300 italic">SET {idx + 1}</span>
-                                                        <div className="flex-1 bg-orange-50/50 p-6 rounded-[30px] flex items-center gap-4 shadow-inner border-2 border-orange-100">
-                                                            <input type="text" value={val.a.whole} placeholder="자" onChange={(e) => { const n = [...fractionInputs]; n[idx].a.whole = e.target.value; setFractionInputs(n); }} className="w-12 h-14 text-center text-xl font-black bg-white rounded-xl outline-none shadow-sm focus:ring-4 focus:ring-orange-100" />
-                                                            <div className="flex flex-col gap-1 flex-1">
-                                                                <input type="text" placeholder="분자" value={val.a.num} onChange={(e) => { const n = [...fractionInputs]; n[idx].a.num = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-orange-100" />
-                                                                <div className="h-1 bg-orange-200" />
-                                                                <input type="text" placeholder="분모" value={val.a.den} onChange={(e) => { const n = [...fractionInputs]; n[idx].a.den = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-orange-100" />
+                                                    {config.pictureMode === 'upload' && (
+                                                        <div className="flex flex-col gap-1 font-sans">
+                                                            <label className="text-[10px] font-black text-slate-300 ml-2 uppercase font-sans">사진 카드 (클릭하여 업로드)</label>
+                                                            <div className="relative overflow-hidden bg-slate-100 rounded-2xl h-48 md:h-64 flex items-center justify-center border-4 border-dashed border-slate-200 hover:border-orange-400 transition-all group font-sans font-black font-black">
+                                                                {val.b ? <img src={val.b} className="w-full h-full object-contain p-4 group-hover:scale-105 transition-transform" /> : (
+                                                                    <div className="flex flex-col items-center gap-2 text-slate-300"><Icon name="Upload" size={40} /><span className="text-[10px] font-black uppercase tracking-widest font-sans font-black font-black">Select Image</span></div>
+                                                                )}
+                                                                <input type="file" accept="image/*" onChange={(e) => handleFileUpload(idx, e.target.files[0])} className="absolute inset-0 opacity-0 cursor-pointer font-sans" />
                                                             </div>
                                                         </div>
+                                                    )}
+                                                </div>
+                                            ))}
+
+                                            {config.contentType === 'word' && wordInputs.slice(0, config.cardCount/2).map((val, idx) => (
+                                                <div key={idx} className="p-4 bg-white rounded-2xl border-4 border-slate-100 flex flex-col gap-2 font-sans font-black font-black">
+                                                    <span className="text-[10px] font-black text-slate-300 uppercase font-sans font-black">SET {idx + 1}</span>
+                                                    <div className="flex gap-2 font-sans font-black">
+                                                        <input type="text" placeholder="첫 번째 카드" value={val.a} onChange={(e) => { const n = [...wordInputs]; n[idx].a = e.target.value; setWordInputs(n); }} className="w-full bg-slate-50 p-2 rounded-xl outline-none font-black text-sm font-sans" />
+                                                        {config.gameType === 'associative' && (
+                                                            <input type="text" placeholder="짝이 될 카드" value={val.b} onChange={(e) => { const n = [...wordInputs]; n[idx].b = e.target.value; setWordInputs(n); }} className="w-full bg-slate-50 p-2 rounded-xl outline-none font-black text-sm font-sans" />
+                                                        )}
                                                     </div>
-                                                ))
-                                            )}
+                                                </div>
+                                            ))}
+
+                                            {config.contentType === 'fraction' && fractionInputs.slice(0, config.cardCount/2).map((val, idx) => (
+                                                <div key={idx} className="p-6 bg-white rounded-[35px] border-4 border-slate-100 shadow-sm flex flex-col gap-4 font-sans font-black">
+                                                    <span className="text-[10px] font-black text-slate-300 uppercase font-sans">SET {idx + 1}</span>
+                                                    <div className="flex items-center gap-4 bg-orange-50/50 p-4 rounded-[30px] border-2 border-orange-100 shadow-inner font-sans font-black font-black">
+                                                        <div className="flex flex-col items-center leading-none font-sans font-black font-black">
+                                                            <span className="text-[10px] font-black text-orange-400 mb-1 font-sans font-black">자연수</span>
+                                                            <input type="text" value={val.a.whole} onChange={(e) => { const n = [...fractionInputs]; n[idx].a.whole = e.target.value; setFractionInputs(n); }} className="w-16 h-14 text-center text-xl font-black bg-white rounded-xl outline-none shadow-sm focus:ring-4 focus:ring-orange-100 font-sans font-black font-black" />
+                                                        </div>
+                                                        <div className="flex flex-col gap-1 flex-1 font-sans font-black">
+                                                            <input type="text" placeholder="분자" value={val.a.num} onChange={(e) => { const n = [...fractionInputs]; n[idx].a.num = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-orange-100 font-sans font-black font-black" />
+                                                            <div className="h-1 bg-orange-200" />
+                                                            <input type="text" placeholder="분모" value={val.a.den} onChange={(e) => { const n = [...fractionInputs]; n[idx].a.den = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-orange-100 font-sans font-black font-black" />
+                                                        </div>
+                                                    </div>
+                                                    {config.gameType === 'associative' && (
+                                                       <div className="flex items-center gap-4 bg-rose-50/50 p-4 rounded-[30px] border-2 border-rose-100 shadow-inner font-sans font-black">
+                                                           <div className="flex flex-col items-center leading-none font-sans font-black font-black font-black font-black font-black font-black">
+                                                               <span className="text-[10px] font-black text-rose-400 mb-1 font-sans font-black">자연수</span>
+                                                               <input type="text" value={val.b.whole} onChange={(e) => { const n = [...fractionInputs]; n[idx].b.whole = e.target.value; setFractionInputs(n); }} className="w-16 h-14 text-center text-xl font-black bg-white rounded-xl outline-none shadow-sm focus:ring-4 focus:ring-rose-100 font-sans font-black font-black" />
+                                                           </div>
+                                                           <div className="flex flex-col gap-1 flex-1 font-sans font-black font-black">
+                                                               <input type="text" placeholder="분자" value={val.b.num} onChange={(e) => { const n = [...fractionInputs]; n[idx].b.num = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-rose-100 font-sans font-black" />
+                                                               <div className="h-1 bg-rose-200" />
+                                                               <input type="text" placeholder="분모" value={val.b.den} onChange={(e) => { const n = [...fractionInputs]; n[idx].b.den = e.target.value; setFractionInputs(n); }} className="w-full h-8 text-center text-xs font-black bg-white rounded-lg outline-none border-b-4 border-rose-100 font-sans font-black" />
+                                                           </div>
+                                                       </div>
+                                                    )}
+                                                </div>
+                                            ))}
                                         </div>
                                     </section>
                                     
-                                    <button disabled={isStepLocked(5)} onClick={handleStartRequest} className={`w-full py-8 md:py-10 rounded-[45px] shadow-xl md:shadow-[0_15px_0_0_#C2410C] transition-all active:scale-[0.97] active:translate-y-2 active:shadow-none text-xl md:text-3xl font-black text-white ${isStepLocked(5) ? 'bg-slate-100 text-slate-300' : 'bg-gradient-to-r from-orange-500 to-rose-500 hover:brightness-110'}`}><Icon name="Rocket" size={32} className="inline mr-4 animate-bounce" /> 지금 시작하기!</button>
+                                    <button disabled={isStepLocked(5)} onClick={handleStartRequest} className={`w-full py-8 md:py-10 rounded-[45px] shadow-xl md:shadow-[0_15px_0_0_#C2410C] transition-all active:scale-[0.97] active:translate-y-2 active:shadow-none text-xl md:text-4xl font-black text-white font-sans ${isStepLocked(5) ? 'bg-slate-100 text-slate-300' : 'bg-gradient-to-r from-orange-500 to-rose-500 hover:brightness-110'}`}><Icon name="Rocket" size={32} className="inline mr-4 animate-bounce" /> 지금 시작하기!</button>
                                 </div>
                             </div>
                         </div>
@@ -476,12 +436,12 @@
 
                     {/* 로딩 화면 */}
                     {view === 'loading' && (
-                        <div className="min-h-screen bg-gradient-to-br from-orange-400 via-orange-500 to-rose-400 flex flex-col items-center justify-center p-6 text-white text-center animate-in">
-                            <div className="bg-white/20 p-8 md:p-14 rounded-[60px] md:rounded-[80px] backdrop-blur-xl border-4 border-white/30 shadow-2xl max-w-sm md:max-w-md w-full">
-                                <Icon name="Loader2" size={60} className="animate-spin mb-10 opacity-60 mx-auto" />
-                                <h2 className="text-xl md:text-3xl font-black mb-6 italic">{loadingStatus}</h2>
+                        <div className="min-h-screen bg-gradient-to-br from-orange-400 via-orange-500 to-rose-400 flex flex-col items-center justify-center p-6 text-white text-center animate-in font-sans">
+                            <div className="bg-white/20 p-8 md:p-16 rounded-[60px] md:rounded-[80px] backdrop-blur-xl border-4 border-white/30 shadow-2xl max-w-sm md:max-w-md w-full font-sans font-black">
+                                <Icon name="Loader2" size={60} className="animate-spin mb-10 opacity-60 mx-auto text-white" />
+                                <h2 className="text-xl md:text-3xl font-black mb-6 italic font-sans">{loadingStatus}</h2>
                                 <div className="w-full h-4 md:h-8 bg-white/20 rounded-full overflow-hidden mb-8 ring-4 ring-white/10 shadow-inner font-sans">
-                                    <div className="h-full bg-white transition-all duration-500 shadow-[0_0_20px_rgba(255,255,255,0.8)]" style={{ width: `${loadingProgress}%` }} />
+                                    <div className="h-full bg-white transition-all duration-500 shadow-[0_0_20px_rgba(255,255,255,0.8)] font-sans" style={{ width: `${loadingProgress}%` }} />
                                 </div>
                                 <p className="text-white text-lg md:text-2xl font-black animate-pulse tracking-tight font-sans">잠시만 기다려 주세요.</p>
                             </div>
@@ -490,75 +450,75 @@
 
                     {/* AI 미리보기 */}
                     {view === 'preview' && (
-                        <div className="min-h-screen bg-[#FFFBEB] flex flex-col p-4 md:p-16 items-center animate-in">
-                            <div className="max-w-5xl w-full bg-white rounded-[40px] md:rounded-[60px] shadow-2xl overflow-hidden border-8 md:border-[12px] border-white flex flex-col h-full text-slate-900">
-                                <div className="bg-emerald-500 p-8 md:p-14 text-center text-white">
+                        <div className="min-h-screen bg-[#FFFBEB] flex flex-col p-4 md:p-16 items-center animate-in font-sans font-black">
+                            <div className="max-w-5xl w-full bg-white rounded-[40px] md:rounded-[60px] shadow-2xl overflow-hidden border-8 md:border-[12px] border-white flex flex-col h-full text-slate-900 font-sans font-black">
+                                <div className="bg-emerald-500 p-8 md:p-14 text-center text-white font-sans font-black font-black">
                                     <h2 className="text-2xl md:text-4xl font-black mb-2 tracking-tight font-sans">AI 그림 감상하기 👨‍🎨</h2>
-                                    <p className="opacity-80 text-sm md:text-xl font-bold tracking-tight">그림이 마음에 드시나요? 마음에 들면 게임을 시작해요!</p>
+                                    <p className="opacity-80 text-sm md:text-xl font-bold tracking-tight font-sans font-black">그림이 마음에 드시나요? 마음에 들면 게임을 시작해요!</p>
                                 </div>
-                                <div className="flex-1 p-6 md:p-14 overflow-y-auto bg-slate-50/50">
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-10">
+                                <div className="flex-1 p-6 md:p-14 overflow-y-auto bg-slate-50/50 font-sans font-black">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:gap-10 font-sans font-black">
                                         {cards.filter((c, i, a) => c.type === 'image' && a.findIndex(t => t.id === c.id) === i).map((set, idx) => (
-                                            <div key={idx} className="bg-white rounded-[35px] md:rounded-[45px] p-4 md:p-8 shadow-xl border-4 border-emerald-50 flex flex-col items-center gap-4 transition-all hover:scale-105">
-                                                <img src={set.content} className="w-full aspect-square object-contain bg-slate-100 rounded-[25px] md:rounded-[35px] p-2 shadow-inner" />
-                                                <div className="px-5 py-2 bg-emerald-500 text-white rounded-full font-black text-xs shadow-md">SET {idx + 1}</div>
+                                            <div key={idx} className="bg-white rounded-[40px] p-4 shadow-xl border-4 border-emerald-50 flex flex-col items-center gap-4 transition-all hover:scale-105 active:rotate-2 font-sans font-black">
+                                                <img src={set.content} className="w-full aspect-square object-contain bg-slate-100 rounded-[30px] p-2 shadow-inner font-sans font-black" alt="Preview" />
+                                                <div className="px-5 py-2 bg-emerald-500 text-white rounded-full font-black text-xs shadow-md font-sans">SET {idx + 1}</div>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
-                                <div className="p-6 md:p-14 bg-white border-t-4 border-slate-50 flex flex-col md:flex-row gap-4">
-                                    <button onClick={startMainGame} className="flex-[2] py-5 md:py-8 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[35px] md:rounded-[45px] shadow-xl font-black text-xl md:text-3xl transition-all active:scale-95">이 그림들로 시작!</button>
-                                    <button onClick={() => setView('settings')} className="flex-1 py-5 md:py-8 bg-slate-100 text-slate-400 rounded-[35px] md:rounded-[45px] font-black text-lg md:text-2xl transition-all active:scale-95">다시 준비</button>
+                                <div className="p-6 md:p-14 bg-white border-t-4 border-slate-50 flex flex-col md:flex-row gap-4 font-black">
+                                    <button onClick={startMainGame} className="flex-[2] py-5 md:py-8 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[40px] shadow-xl text-xl md:text-3xl transition-all active:scale-95 font-sans font-black font-black">이 그림들로 시작!</button>
+                                    <button onClick={() => setView('settings')} className="flex-1 py-5 md:py-8 bg-slate-100 text-slate-400 rounded-[40px] text-lg md:text-2xl transition-all active:scale-95 font-sans font-black font-black">다시 준비</button>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* 게임 플레이 */}
+                    {/* 플레이 화면 */}
                     {view === 'playing' && (
                         <div className="min-h-screen bg-[#F1F5F9] flex flex-col p-4 md:p-10 font-sans overflow-x-hidden animate-in">
-                            <div className="max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 items-center justify-between mb-10 text-slate-900">
-                                <div className="flex gap-4">
+                            <div className="max-w-6xl mx-auto w-full flex flex-col md:flex-row gap-4 items-center justify-between mb-10 text-slate-900 font-sans font-black font-black">
+                                <div className="flex gap-4 font-sans font-black">
                                     {config.playerCount === 1 ? (
-                                        <div className="bg-white px-8 md:px-12 py-5 md:py-8 rounded-[40px] md:rounded-[55px] shadow-xl flex items-center gap-6 border-2 border-slate-100">
+                                        <div className="bg-white px-8 md:px-12 py-5 md:py-8 rounded-[40px] md:rounded-[55px] shadow-xl flex items-center gap-6 border-2 border-slate-100 font-sans font-black font-black">
                                             <div className={`p-4 rounded-3xl ${gameStarted ? 'bg-orange-100 animate-pulse' : 'bg-slate-50'}`}><Icon name="Timer" size={32} className={gameStarted ? 'text-orange-500' : 'text-slate-300'} /></div>
-                                            <div className="flex flex-col"><span className="text-[10px] font-black text-slate-400 tracking-widest uppercase">Timer</span><span className="text-3xl md:text-6xl font-black text-slate-800 tabular-nums font-mono leading-none">{Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span></div>
+                                            <div className="flex flex-col font-sans font-black"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-sans font-black">Time</span><span className="text-3xl md:text-6xl font-black text-slate-800 tabular-nums font-mono leading-none font-sans font-black">{Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span></div>
                                         </div>
                                     ) : (
                                         scores.map((s, idx) => (
-                                            <div key={idx} className={`px-6 md:px-12 py-5 md:py-8 rounded-[40px] md:rounded-[55px] flex flex-col items-center transition-all ${currentPlayer === idx ? 'bg-orange-500 text-white shadow-[0_12px_0_0_#C2410C] -translate-y-2 ring-8 ring-orange-100 border-4 border-orange-300' : 'bg-white text-slate-400 opacity-60 shadow-sm'}`}>
-                                                <div className="flex items-center gap-2 mb-1 font-black text-[10px] uppercase"><Icon name="User" size={16} /> P{idx + 1}</div>
-                                                <span className="text-2xl md:text-5xl font-black leading-none">{s}점</span>
+                                            <div key={idx} className={`px-6 md:px-12 py-5 md:py-8 rounded-[40px] md:rounded-[55px] flex flex-col items-center transition-all ${currentPlayer === idx ? 'bg-orange-500 text-white shadow-[0_12px_0_0_#C2410C] -translate-y-2 ring-8 ring-orange-100 border-4 border-orange-300 shadow-xl font-sans font-black' : 'bg-white text-slate-400 opacity-60 shadow-sm font-sans font-black'}`}>
+                                                <div className="flex items-center gap-2 mb-1 font-black text-[10px] uppercase font-sans font-black"><Icon name="User" size={16} /> P{idx + 1}</div>
+                                                <span className="text-2xl md:text-5xl font-black leading-none font-sans font-black">{s}점</span>
                                             </div>
                                         ))
                                     )}
                                 </div>
                                 {config.playerCount > 1 && (
-                                   <div className="bg-white px-8 md:px-12 py-3 md:py-5 rounded-full border-4 border-orange-100 flex items-center gap-4 shadow-xl animate-bounce">
-                                      <Icon name="MousePointer2" size={24} className="text-orange-500" /><span className="font-black text-orange-900 text-base md:text-2xl tracking-tight">P{currentPlayer + 1}'s Turn!</span>
+                                   <div className="bg-white px-8 md:px-12 py-3 md:py-5 rounded-full border-4 border-orange-100 flex items-center gap-4 shadow-xl animate-bounce font-sans font-black">
+                                      <Icon name="MousePointer2" size={24} className="text-orange-500 font-sans font-black" /><span className="font-black text-orange-900 text-base md:text-2xl tracking-tight font-sans font-black font-black">P{currentPlayer + 1}'s Turn!</span>
                                    </div>
                                 )}
                             </div>
-                            <div className={`max-w-6xl mx-auto w-full grid gap-4 md:gap-8 flex-1 ${config.cardCount > 16 ? 'grid-cols-4 md:grid-cols-6' : 'grid-cols-3 md:grid-cols-4'}`}>
+                            <div className={`max-w-6xl mx-auto w-full grid gap-4 md:gap-8 flex-1 ${config.cardCount > 16 ? 'grid-cols-4 md:grid-cols-6' : 'grid-cols-3 md:grid-cols-4'} font-sans font-black font-black`}>
                                 {cards.map((card, idx) => {
                                     const isFlipped = flippedIndices.includes(idx) || matchedIds.includes(card.id);
                                     const isMatched = matchedIds.includes(card.id);
                                     return (
-                                        <div key={card.instanceId} onClick={() => handleCardClick(idx)} className="relative aspect-[3/4] cursor-pointer group transition-transform hover:scale-[1.03]">
-                                            <div className={`relative w-full h-full transition-transform duration-700 preserve-3d ${isFlipped ? 'rotate-y-180' : ''}`}>
-                                                <div className="absolute inset-0 backface-hidden flex items-center justify-center rounded-[25px] md:rounded-[45px] border-[6px] md:border-[10px] border-white shadow-2xl bg-gradient-to-br from-orange-400 to-rose-400 overflow-hidden group-hover:brightness-110">
-                                                    <Icon name="HelpCircle" size={48} className="text-white opacity-30" />
+                                        <div key={card.instanceId} onClick={() => handleCardClick(idx)} className="relative aspect-[3/4] cursor-pointer group transition-transform hover:scale-[1.03] font-sans font-black font-black font-black font-black">
+                                            <div className={`relative w-full h-full transition-transform duration-700 preserve-3d font-sans font-black ${isFlipped ? 'rotate-y-180' : ''}`}>
+                                                <div className="absolute inset-0 backface-hidden flex items-center justify-center rounded-[25px] md:rounded-[45px] border-[6px] md:border-[10px] border-white shadow-2xl bg-gradient-to-br from-orange-400 to-rose-400 overflow-hidden text-white font-black font-sans font-black">
+                                                    <Icon name="HelpCircle" size={48} className="opacity-30 text-white font-sans font-black font-black" />
                                                 </div>
-                                                <div className={`absolute inset-0 backface-hidden rotate-y-180 flex items-center justify-center rounded-[25px] md:rounded-[45px] border-[6px] md:border-[10px] bg-white shadow-2xl ${isMatched ? 'border-emerald-400 bg-emerald-50' : 'border-slate-50'}`}>
-                                                    <div className={!isFlipped ? 'invisible' : 'visible w-full h-full flex items-center justify-center p-3 animate-in zoom-in duration-300'}>
-                                                        {card.type === 'image' ? <img src={card.content} className="max-w-full max-h-full object-contain rounded-2xl drop-shadow-sm" /> : 
-                                                         card.type === 'text' ? <span className="text-sm md:text-3xl font-black text-center break-all text-slate-800">{card.content}</span> : (
-                                                            <div className={`flex items-center gap-2 font-black ${isMatched ? 'text-emerald-600' : 'text-orange-600'}`}>
-                                                                {card.content.whole && <span className="text-2xl md:text-5xl">{card.content.whole}</span>}
-                                                                <div className="flex flex-col items-center">
-                                                                    <span className="text-xl md:text-4xl">{card.content.num}</span>
-                                                                    <div className={`h-1 md:h-1.5 w-full rounded-full ${isMatched ? 'bg-emerald-500' : 'bg-orange-500'}`} />
-                                                                    <span className="text-xl md:text-4xl">{card.content.den}</span>
+                                                <div className={`absolute inset-0 backface-hidden rotate-y-180 flex items-center justify-center rounded-[25px] md:rounded-[45px] border-[6px] md:border-[10px] bg-white shadow-2xl font-sans font-black ${isMatched ? 'border-emerald-400 bg-emerald-50' : 'border-slate-50 font-sans font-black'}`}>
+                                                    <div className={!isFlipped ? 'invisible' : 'visible w-full h-full flex items-center justify-center p-3 animate-in zoom-in duration-300 font-black font-sans text-slate-800 font-sans font-black'}>
+                                                        {card.type === 'image' ? <img src={card.content} className="max-w-full max-h-full object-contain rounded-2xl drop-shadow-sm font-sans font-black" alt="Card" /> : 
+                                                         card.type === 'text' ? <span className="text-sm md:text-3xl font-black text-center break-all font-sans font-black font-black">{card.content}</span> : (
+                                                            <div className={`flex items-center gap-2 font-black ${isMatched ? 'text-emerald-600 font-sans font-black' : 'text-orange-600 font-sans font-black'}`}>
+                                                                {card.content.whole && <span className="text-2xl md:text-5xl font-sans font-black font-black">{card.content.whole}</span>}
+                                                                <div className="flex flex-col items-center leading-none font-sans font-black font-black">
+                                                                    <span className="text-xl md:text-4xl font-sans font-black font-black font-black">{card.content.num}</span>
+                                                                    <div className={`h-1 md:h-1.5 w-full rounded-full ${isMatched ? 'bg-emerald-500' : 'bg-orange-500'} my-0.5 font-sans font-black`} />
+                                                                    <span className="text-xl md:text-4xl font-sans font-black font-black font-black font-black">{card.content.den}</span>
                                                                 </div>
                                                             </div>
                                                         )}
@@ -574,45 +534,45 @@
 
                     {/* 결과 화면 */}
                     {view === 'result' && (
-                        <div className="min-h-screen bg-[#FFFBEB] flex flex-col items-center justify-center p-4 md:p-10 font-sans text-slate-900 overflow-hidden relative animate-in">
-                            <div className="fixed -left-[2000px] top-0">
-                                <div ref={resultRef} className="w-[800px] p-20 bg-white flex flex-col items-center border-[30px] border-orange-500 shadow-2xl relative font-sans">
-                                    <div className="w-full border-[6px] border-dashed border-orange-200 p-16 flex flex-col items-center text-center">
-                                        <div className="bg-orange-500 p-10 rounded-[55px] mb-10 shadow-2xl"><Icon name="Trophy" size={100} className="text-white" /></div>
-                                        <h1 className="text-7xl font-black mb-4 uppercase italic text-orange-600 tracking-tighter">Victory!</h1>
-                                        <div className="h-2 w-64 bg-orange-200 rounded-full mb-16" />
+                        <div className="min-h-screen bg-[#FFFBEB] flex flex-col items-center justify-center p-4 md:p-10 font-sans text-slate-900 overflow-hidden relative animate-in font-sans font-black font-black">
+                            <div className="fixed -left-[2000px] top-0 font-sans font-black">
+                                <div ref={resultRef} className="w-[800px] p-20 bg-white flex flex-col items-center border-[30px] border-orange-500 shadow-2xl relative font-sans font-black font-black">
+                                    <div className="w-full border-[6px] border-dashed border-orange-200 p-16 flex flex-col items-center text-center font-black font-black font-black font-black">
+                                        <div className="bg-orange-500 p-10 rounded-[55px] mb-10 shadow-2xl font-sans font-black"><Icon name="Trophy" size={100} className="text-white font-sans font-black" /></div>
+                                        <h1 className="text-7xl font-black mb-4 uppercase italic text-orange-600 tracking-tighter font-sans font-black">Victory!</h1>
+                                        <div className="h-2 w-64 bg-orange-200 rounded-full mb-16 font-sans font-black font-black font-black" />
                                         {config.playerCount === 1 ? (
-                                            <div className="text-center mb-16 font-black"><p className="text-orange-300 text-xl uppercase mb-6 tracking-[0.5em]">Memory Master</p><p className="text-9xl text-slate-800 font-black mb-6 tracking-tight">{userName || "대단한 어린이"}</p><p className="text-slate-400 text-3xl font-bold">위 어린이는 놀라운 기억력으로 놀이를 정복하였습니다.</p></div>
+                                            <div className="text-center mb-16 font-black font-black font-black"><p className="text-orange-300 text-xl uppercase mb-6 tracking-[0.5em] font-sans font-black">Memory Master</p><p className="text-9xl text-slate-800 font-black mb-6 tracking-tight font-sans font-black font-black">{userName || "대단한 어린이"}</p><p className="text-slate-400 text-3xl font-bold font-sans font-black">위 어린이는 놀라운 기억력으로 놀이를 정복하였습니다.</p></div>
                                         ) : (
-                                            <div className="w-full text-slate-800"><div className="text-center mb-16"><p className="text-9xl font-black uppercase italic tracking-tighter">Hall of Fame</p></div><div className="grid grid-cols-2 gap-12 w-full">{scores.map((s, i) => (<div key={i} className={`p-12 rounded-[65px] border-4 flex flex-col items-center ${scores[i] === Math.max(...scores) ? 'border-orange-500 bg-orange-50 shadow-2xl scale-105' : 'border-slate-100 bg-slate-50'}`}><p className={`text-3xl font-black mb-4 ${scores[i] === Math.max(...scores) ? 'text-orange-600' : 'text-slate-400'}`}>PLAYER {i+1}</p><span className="text-8xl font-black">{s}점</span></div>))}</div></div>
+                                            <div className="w-full text-slate-800 font-sans font-black font-black font-black"><div className="text-center mb-16 font-black font-sans font-black font-black font-black"><p className="text-9xl font-black uppercase italic tracking-tighter font-sans font-black">Good Game</p></div><div className="grid grid-cols-2 gap-12 w-full font-sans font-black font-black">{scores.map((s, i) => (<div key={i} className={`p-12 rounded-[65px] border-4 flex flex-col items-center ${scores[i] === Math.max(...scores) ? 'border-orange-500 bg-orange-50 shadow-2xl scale-105 font-sans font-black' : 'border-slate-100 bg-slate-50 font-sans font-black font-black'}`}><p className={`text-3xl font-black mb-4 ${scores[i] === Math.max(...scores) ? 'text-orange-600 font-sans font-black' : 'text-slate-400 font-sans font-black'}`}>PLAYER {i+1}</p><span className="text-8xl font-black font-sans font-black">{s}점</span></div>))}</div></div>
                                         )}
-                                        <div className="mt-24 flex justify-between w-full text-slate-300 font-black italic uppercase text-xl font-mono"><span>MEMORY GAME MAKER</span><span>{new Date().toLocaleDateString()}</span></div>
+                                        <div className="mt-24 flex justify-between w-full text-slate-300 font-black italic uppercase text-xl font-mono font-sans font-black font-black"><span>MEMORY GAME MAKER</span><span>{new Date().toLocaleDateString()}</span></div>
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="relative z-10 flex flex-col items-center max-w-2xl w-full bg-white/95 backdrop-blur-3xl p-10 md:p-20 rounded-[60px] md:rounded-[80px] border-8 border-white shadow-[0_30px_0_0_#FEF3C7] text-slate-900 font-sans">
-                                <div className="w-24 h-24 md:w-36 md:h-36 bg-gradient-to-br from-orange-400 to-rose-400 rounded-[50px] flex items-center justify-center shadow-2xl mb-8 animate-bounce"><Icon name="Trophy" size={64} className="text-white" /></div>
-                                <h2 className="text-4xl md:text-7xl font-black mb-6 uppercase tracking-tighter">Mission Clear!</h2>
-                                <div className="w-full mb-10 md:mb-16 bg-slate-50/50 p-8 md:p-14 rounded-[50px] border-4 border-white shadow-inner">
+                            <div className="relative z-10 flex flex-col items-center max-w-2xl w-full bg-white/95 backdrop-blur-3xl p-10 md:p-20 rounded-[60px] md:rounded-[80px] border-8 border-white shadow-[0_30px_0_0_#FEF3C7] text-slate-900 font-sans font-black font-black font-black font-black">
+                                <div className="w-24 h-24 md:w-36 md:h-36 bg-gradient-to-br from-orange-400 to-rose-400 rounded-[50px] flex items-center justify-center shadow-2xl mb-8 animate-bounce font-sans font-black"><Icon name="Trophy" size={64} className="text-white font-sans font-black font-black" /></div>
+                                <h2 className="text-4xl md:text-7xl font-black mb-6 uppercase tracking-tighter font-sans font-black font-black font-black">Mission Clear!</h2>
+                                <div className="w-full mb-10 md:mb-16 bg-slate-50/50 p-8 md:p-14 rounded-[50px] border-4 border-white shadow-inner font-sans font-black font-black font-black">
                                     {config.playerCount === 1 ? (
-                                        <div className="flex flex-col items-center gap-6 md:gap-12"><input type="text" placeholder="친구의 이름을 적어주세요!" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full bg-white border-4 border-orange-100 rounded-[35px] py-5 md:py-8 text-center text-xl md:text-4xl font-black outline-none focus:border-orange-500 shadow-sm transition-all" /><span className="text-6xl md:text-9xl font-black text-orange-500 tabular-nums leading-none tracking-tighter font-mono">{Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span></div>
+                                        <div className="flex flex-col items-center gap-6 md:gap-12 font-sans font-black font-black font-black font-black"><input type="text" placeholder="친구의 이름을 적어주세요!" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full bg-white border-4 border-orange-100 rounded-[35px] py-5 md:py-8 text-center text-xl md:text-4xl font-black outline-none focus:border-orange-500 shadow-sm transition-all font-sans font-black" /><span className="text-6xl md:text-9xl font-black text-orange-500 tabular-nums leading-none tracking-tighter font-mono font-sans font-black">{Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}</span></div>
                                     ) : (
-                                        <div className="grid grid-cols-2 gap-6 md:gap-10 tabular-nums font-mono font-sans">{scores.map((s, i) => (<div key={i} className={`p-6 md:p-10 rounded-[45px] md:rounded-[60px] border-4 flex flex-col items-center transition-all ${scores[i] === Math.max(...scores) ? 'bg-orange-500 text-white shadow-xl scale-105' : 'bg-white border-slate-200 text-slate-300 opacity-60'}`}><span className="text-[10px] md:text-xs font-black uppercase mb-2 tracking-widest">P{i+1} {scores[i] === Math.max(...scores) && '🏆'}</span><span className="text-3xl md:text-6xl font-black leading-none">{s}점</span><span className="text-[10px] font-black opacity-60 mt-2">시도: {attempts[i]}회</span></div>))}</div>
+                                        <div className="grid grid-cols-2 gap-6 md:gap-10 tabular-nums font-mono font-sans font-black font-black">{scores.map((s, i) => (<div key={i} className={`p-6 md:p-10 rounded-[45px] md:rounded-[60px] border-4 flex flex-col items-center transition-all ${scores[i] === Math.max(...scores) ? 'bg-orange-500 text-white shadow-xl scale-105 font-sans font-black' : 'bg-white border-slate-200 text-slate-300 opacity-60 font-sans font-black'}`}><span className="text-[10px] md:text-xs font-black uppercase mb-2 tracking-widest font-sans font-black font-black">P{i+1} {scores[i] === Math.max(...scores) && '🏆'}</span><span className="text-3xl md:text-6xl font-black leading-none font-sans font-black">{s}점</span><span className="text-[10px] font-black opacity-60 mt-2 font-sans font-black">시도: {attempts[i]}회</span></div>))}</div>
                                     )}
                                 </div>
-                                <div className="flex flex-col gap-6 w-full max-w-md font-black">
-                                    <button onClick={handleCapture} disabled={isCapturing} className="w-full py-6 md:py-8 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[40px] shadow-[0_10px_0_0_#059669] flex items-center justify-center gap-4 transition-all active:scale-95 text-xl md:text-3xl tracking-tight">상장 이미지 만들기</button>
-                                    <div className="flex gap-4"><button onClick={() => prepareGameData()} className="flex-1 py-5 md:py-7 bg-white text-orange-600 border-4 border-orange-100 rounded-[40px] shadow-[0_8px_0_0_#FED7AA] font-black text-lg md:text-2xl active:translate-y-1 active:shadow-none transition-all">다시하기</button><button onClick={() => { setActiveStep(1); setView('settings'); setConfig({ cardCount: 12, contentType: null, pictureMode: null, gameType: null, playerCount: null }); }} className="flex-1 py-5 md:py-7 bg-orange-500 text-white rounded-[40px] shadow-[0_8px_0_0_#C2410C] font-black text-lg md:text-2xl active:translate-y-1 active:shadow-none transition-all">설정</button></div>
+                                <div className="flex flex-col gap-6 w-full max-w-md font-black font-sans font-black font-black font-black font-black">
+                                    <button onClick={handleCapture} disabled={isCapturing} className="w-full py-6 md:py-8 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[40px] shadow-[0_10px_0_0_#059669] flex items-center justify-center gap-4 transition-all active:scale-95 text-xl md:text-3xl font-black tracking-tight font-sans font-black font-black">상장 이미지 만들기</button>
+                                    <div className="flex gap-4 font-black font-sans font-black"><button onClick={() => prepareGameData()} className="flex-1 py-5 md:py-7 bg-white text-orange-600 border-4 border-orange-100 rounded-[40px] shadow-[0_8px_0_0_#FED7AA] font-black text-lg md:text-2xl active:translate-y-1 active:shadow-none transition-all font-sans font-black">다시하기</button><button onClick={() => { setActiveStep(1); setView('settings'); setConfig({ cardCount: 12, contentType: null, pictureMode: null, gameType: null, playerCount: null }); }} className="flex-1 py-5 md:py-7 bg-orange-500 text-white rounded-[40px] shadow-[0_8px_0_0_#C2410C] font-black text-lg md:text-2xl active:translate-y-1 active:shadow-none transition-all font-sans font-black">설정</button></div>
                                 </div>
                             </div>
                             
                             {capturedImage && (
-                                <div className="fixed inset-0 z-[120] bg-orange-950/70 backdrop-blur-md flex flex-col items-center justify-center p-4 font-sans animate-in" onClick={() => setCapturedImage(null)}>
-                                    <div className="relative max-w-lg w-full bg-white rounded-[50px] p-3 shadow-2xl border-8 md:border-[12px] border-white" onClick={e => e.stopPropagation()}>
-                                       <img src={capturedImage} className="w-full h-auto rounded-[35px] md:rounded-[45px]" />
-                                       <div className="absolute bottom-10 left-0 right-0 px-8 py-2 text-center"><div className="inline-block bg-orange-500 text-white px-8 py-3 rounded-full font-black text-xs md:text-sm shadow-xl animate-bounce">이미지를 꾹 눌러 저장하세요! 📸</div></div>
-                                       <button onClick={() => setCapturedImage(null)} className="absolute top-6 right-6 bg-black/50 text-white p-2 rounded-full hover:bg-black uppercase font-black"><Icon name="X" size={20} /></button>
+                                <div className="fixed inset-0 z-[120] bg-orange-950/70 backdrop-blur-md flex flex-col items-center justify-center p-4 font-sans animate-in font-sans font-black" onClick={() => setCapturedImage(null)}>
+                                    <div className="relative max-w-lg w-full bg-white rounded-[50px] p-3 shadow-2xl border-8 md:border-[12px] border-white font-black font-sans font-black" onClick={e => e.stopPropagation()}>
+                                       <img src={capturedImage} className="w-full h-auto rounded-[35px] md:rounded-[45px] font-sans font-black font-black" alt="Captured" />
+                                       <div className="absolute bottom-10 left-0 right-0 px-8 py-2 text-center font-black font-sans font-black"><div className="inline-block bg-orange-500 text-white px-8 py-3 rounded-full font-black text-xs md:text-sm shadow-xl animate-bounce font-sans font-black font-black">이미지를 꾹 눌러 저장하세요! 📸</div></div>
+                                       <button onClick={() => setCapturedImage(null)} className="absolute top-6 right-6 bg-black/50 text-white p-2 rounded-full hover:bg-black font-sans uppercase font-black font-black"><Icon name="X" size={20} className="text-white font-sans font-black font-black font-black" /></button>
                                     </div>
                                 </div>
                             )}
